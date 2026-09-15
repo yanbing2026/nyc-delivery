@@ -1,0 +1,16 @@
+# 运行数据（订单/队列/打印小票）—— 每次跑都会重新生成
+backend/data/
+worker/.wrangler/
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+package-lock.json
+
+# 本机临时
+.DS_Store
+*.log

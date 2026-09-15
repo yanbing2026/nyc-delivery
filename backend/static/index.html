@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>公众号菜单 + 云打印 控制台</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--fg:#e8ecf3;--dim:#93a0b4;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;--pri:#3b82f6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:14px 12px 60px}
+h1{font-size:19px;margin:0 0 4px}
+h2{font-size:16px;margin:0 0 10px}
+.sub{color:var(--dim);font-size:12px;margin-bottom:12px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.tabs button{min-height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:14px}
+.tabs button.on{background:var(--pri);border-color:var(--pri);font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+label{display:block;font-size:12px;color:var(--dim);margin:8px 0 4px}
+input,select,textarea{width:100%;min-height:44px;padding:10px;border-radius:9px;border:1px solid var(--line);background:#0c0e12;color:var(--fg);font-size:15px}
+textarea{min-height:70px}
+button.act{min-height:48px;flex:1;min-width:132px;border-radius:11px;border:0;background:var(--pri);color:#fff;font-size:15px;font-weight:600}
+button.act.gray{background:#2a3040}button.act.red{background:var(--err)}button.act.green{background:var(--ok)}
+button.tiny{min-height:36px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:#20242e;color:var(--fg)}
+.menu-lvl{border:1px dashed var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+.sub-b{border-left:3px solid var(--pri);padding-left:10px;margin-top:8px}
+.preview{background:#f7f7f7;color:#111;border-radius:10px;padding:0;overflow:hidden;margin-top:10px}
+.pv-bar{display:flex;border-top:1px solid #ddd;background:#fafafa}
+.pv-bar div{flex:1;text-align:center;padding:12px 4px;font-size:13px;border-right:1px solid #eee}
+.pv-bar div:last-child{border:0}
+.pv-sub{display:flex;border-top:1px solid #ddd;background:#fff}
+.pv-sub div{flex:1;text-align:center;padding:11px 3px;font-size:12px;color:#333;border-right:1px solid #f0f0f0}
+pre{margin:0;white-space:pre;overflow:auto;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
+.receipt{background:#fffdf5;color:#111;border-radius:8px;padding:12px;max-width:100%}
+.err{color:var(--err);font-size:13px}.ok{color:var(--ok);font-size:13px}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;margin-left:6px}
+.badge.demo{background:#3b2f07;color:var(--warn)}.badge.live{background:#06301a;color:var(--ok)}
+.order{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px}
+.dim{color:var(--dim);font-size:12px}
+.hide{display:none}
+</style>
+</head>
+<body>
+<h1>公众号自定义菜单 + 云打印 控制台</h1>
+<div class="sub">模式 <span id="mode" class="badge demo">demo</span> · 打印 <span id="drv" class="dim">-</span> · 公网地址 <span id="base" class="dim">-</span></div>
+
+<div class="tabs">
+  <button class="on" data-tab="menu">1 菜单配置</button>
+  <button data-tab="printer">2 打印设置</button>
+  <button data-tab="orders">3 订单</button>
+  <button data-tab="guide">4 怎么上线</button>
+</div>
+
+<!-- ============ 菜单 ============ -->
+<section id="tab-menu">
+  <div class="card">
+    <h2>菜单编辑器</h2>
+    <div class="dim">一级最多 3 个；有二级时二级 2~5 个；一级名称 ≤16 字节（5 个汉字），二级 ≤60 字节。</div>
+    <div id="editor"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="act gray" onclick="addTop()">+ 加一级菜单</button>
+      <button class="act" onclick="saveDraft()">保存草稿</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>微信里的效果预览</h2>
+    <div class="preview">
+      <div class="pv-sub" id="pvSub"></div>
+      <div class="pv-bar" id="pvBar"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>校验 / 推送</h2>
+    <div id="errs"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="act green" onclick="pushMenu()">推送到微信</button>
+      <button class="act gray" onclick="pullMenu()">拉线上菜单</button>
+      <button class="act red" onclick="delMenu()">删除菜单</button>
+    </div>
+    <label>推送结果 / 实际发出的请求</label>
+    <pre id="pushOut" style="max-height:280px">-</pre>
+  </div>
+
+  <div class="card">
+    <h2>接入参数</h2>
+    <div class="row">
+      <div style="flex:1;min-width:160px"><label>AppID</label><input id="appid" placeholder="wx................"></div>
+      <div style="flex:1;min-width:160px"><label>AppSecret</label><input id="appsecret" placeholder="没有就先留空"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1;min-width:160px"><label>Token（微信后台填同一个）</label><input id="token"></div>
+      <div style="flex:1;min-width:160px"><label>模式</label><select id="cfgmode"><option value="demo">demo 演示（不真调微信）</option><option value="live">live 真调微信</option></select></div>
+    </div>
+    <label>公网地址（点单页域名，微信里点菜单会打开它）</label><input id="public_base">
+    <div class="row" style="margin-top:10px"><button class="act" onclick="saveCfg()">保存</button>
+      <button class="act gray" onclick="showOauth()">生成网页授权链接</button></div>
+    <pre id="oauthOut" class="hide" style="margin-top:8px"></pre>
+  </div>
+</section>
+
+<!-- ============ 打印 ============ -->
+<section id="tab-printer" class="hide">
+  <div class="card">
+    <h2>打印机怎么接（三选一）</h2>
+    <div class="dim" id="drvHint"></div>
+    <label>驱动</label>
+    <select id="driver" onchange="drvForm()">
+      <option value="dryrun">预览模式 dryrun（不连打印机，存小票文件，先跑通流程）</option>
+      <option value="feie">飞鹅云打印机 feie（http api，打印机自己联网）</option>
+      <option value="net">网口小票机 net（TCP 9100 发 ESC/POS 原始字节）</option>
+      <option value="queue">排队模式 queue（蓝牙/USB 打印机：店里那台设备来取单）</option>
+    </select>
+    <div id="queueBox" class="hide">
+      <div class="row">
+        <div style="flex:1;min-width:150px"><label>agent key（取单口令，现场设备用它取单）</label><input id="q_key" value="change-me"></div>
+        <div style="flex:1;min-width:120px"><label>打印机名字</label><input id="q_target" value="前台平板"></div>
+      </div>
+      <div class="dim">蓝牙打印机只能这么接：服务器把单排进队列 → 店里连着打印机的手机/平板/PC 用 agent.py（或安卓 App）拉单 → 蓝牙打出去。</div>
+      <div class="row" style="margin-top:8px"><button class="act gray" onclick="showJobs()">查看打印队列</button></div>
+    </div>
+    <div id="feieBox" class="hide">
+      <label>飞鹅云账号 USER</label><input id="f_user">
+      <label>UKEY（开发者密钥）</label><input id="f_ukey">
+      <label>打印机编号 SN</label><input id="f_sn">
+      <div class="dim">签名：sha1(user + UKEY + stime)，接口 http://api.feieyun.cn/Api/Open/</div>
+    </div>
+    <div id="netBox" class="hide">
+      <div class="row">
+        <div style="flex:2;min-width:150px"><label>打印机 IP / 主机名</label><input id="n_host" placeholder="192.168.1.50"></div>
+        <div style="flex:1;min-width:100px"><label>端口</label><input id="n_port" value="9100"></div>
+      </div>
+      <div class="dim">要求这台机器和打印机在同一局域网；外网打印要么端口映射，要么用云打印机。</div>
+    </div>
+    <div class="row">
+      <div style="flex:1;min-width:120px"><label>纸宽</label><select id="width"><option value="32">58mm（32 半角/行）</option><option value="48">80mm（48 半角/行）</option></select></div>
+      <div style="flex:1;min-width:120px"><label>份数</label><input id="copies" value="1"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="act" onclick="savePrinter()">保存打印设置</button>
+      <button class="act green" onclick="testPrint()">打印测试页</button>
+    </div>
+    <pre id="printOut" style="margin-top:10px;max-height:300px">-</pre>
+  </div>
+  <div class="card">
+    <h2>店铺信息（打在小票抬头）</h2>
+    <label>店名</label><input id="s_name"><label>副标题</label><input id="s_slogan">
+    <label>电话</label><input id="s_phone"><label>地址</label><input id="s_addr">
+    <label>页脚（用 | 分行）</label><input id="s_footer">
+    <label><input type="checkbox" id="auto_print" style="width:auto;min-height:0"> 下单后自动打印</label>
+    <div class="row"><button class="act" onclick="saveShop()">保存店铺信息</button></div>
+  </div>
+</section>
+
+<!-- ============ 订单 ============ -->
+<section id="tab-orders" class="hide">
+  <div class="card">
+    <h2>订单 · 小票</h2>
+    <div class="row"><button class="act gray" onclick="loadOrders()">刷新</button>
+      <a class="act gray" style="text-align:center;line-height:48px;text-decoration:none;color:#fff" href="/order" target="_blank">打开点单页</a></div>
+  </div>
+  <div id="orders"></div>
+  <div class="card"><h2>小票预览</h2><div class="receipt"><pre id="rcpt">点上面的「看小票」</pre></div></div>
+</section>
+
+<!-- ============ 说明 ============ -->
+<section id="tab-guide" class="hide">
+  <div class="card">
+    <h2>要走通的 5 步</h2>
+    <pre id="guideTxt"></pre>
+  </div>
+</section>
+
+<script>
+let S={menu:{button:[]},cfg:{}};
+const $=id=>document.getElementById(id);
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  ['menu','printer','orders','guide'].forEach(t=>$('tab-'+t).classList.toggle('hide',t!==b.dataset.tab));
+});
+
+async function api(path,body){
+  const r=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:undefined);
+  return r.json();
+}
+async function boot(){
+  const s=await api('/api/state');S=s;
+  S.menu=s.menu||{button:[]};
+  $('mode').textContent=s.config.mode;$('mode').className='badge '+s.config.mode;
+  $('drv').textContent=s.config.printer.driver;$('base').textContent=s.config.public_base;
+  $('appid').value=s.config.wechat.appid;$('appsecret').value=s.config.wechat.appsecret;
+  $('token').value=s.config.wechat.token;$('cfgmode').value=s.config.mode;$('public_base').value=s.config.public_base;
+  const p=s.config.printer;
+  $('driver').value=p.driver;$('width').value=String(p.width);$('copies').value=p.copies;
+  $('f_user').value=p.feie.user;$('f_ukey').value=p.feie.ukey;$('f_sn').value=p.feie.sn;
+  $('n_host').value=p.net.host;$('n_port').value=p.net.port;
+  if(p.queue){$('q_key').value=p.queue.agent_key||'change-me';$('q_target').value=p.queue.target||'前台平板'}
+  const sh=s.config.shop;$('s_name').value=sh.name;$('s_slogan').value=sh.slogan||'';
+  $('s_phone').value=sh.phone||'';$('s_addr').value=sh.addr||'';$('s_footer').value=sh.footer||'';
+  $('auto_print').checked=s.config.auto_print!==false;
+  render();drvForm();renderErrs(s.errors||[]);loadOrders();
+  $('guideTxt').textContent=GUIDE;
+}
+function render(){
+  const e=$('editor');e.innerHTML='';
+  (S.menu.button||[]).forEach((b,i)=>{
+    const d=document.createElement('div');d.className='menu-lvl';
+    d.innerHTML=`<div class="row"><div style="flex:3;min-width:140px"><label>一级名称</label>
+      <input value="${esc(b.name||'')}" oninput="up(${i},null,'name',this.value)"></div>
+      <button class="tiny" onclick="addSub(${i})" style="margin-bottom:4px">+ 二级</button>
+      <button class="tiny red" onclick="delTop(${i})" style="margin-bottom:4px">删</button></div>`;
+    (b.sub_button||[]).forEach((s,j)=>{
+      const w=document.createElement('div');w.className='sub-b';
+      const needUrl=s.type==='view',needKey=['click','scancode_push','scancode_waitmsg','pic_sysphoto','pic_photo_or_album','pic_weixin','location_select'].includes(s.type);
+      w.innerHTML=`<div class="row"><div style="flex:2;min-width:120px"><label>二级名称</label>
+        <input value="${esc(s.name||'')}" oninput="up(${i},${j},'name',this.value)"></div>
+        <div style="flex:1;min-width:110px"><label>type</label><select onchange="up(${i},${j},'type',this.value);render()">
+        ${["click","view","miniprogram","scancode_push","scancode_waitmsg","pic_photo_or_album","location_select"].map(t=>`<option ${s.type===t?'selected':''}>${t}</option>`).join('')}</select></div>
+        <button class="tiny red" onclick="delSub(${i},${j})" style="margin-bottom:4px">删</button></div>
+        ${needUrl?`<label>url</label><input value="${esc(s.url||'')}" oninput="up(${i},${j},'url',this.value)" placeholder="http://你的域名/order">`:''}
+        ${needKey?`<label>key（事件关键字）</label><input value="${esc(s.key||'')}" oninput="up(${i},${j},'key',this.value)" placeholder="MY_ORDERS">`:''}`;
+      d.appendChild(w);
+    });
+    e.appendChild(d);
+  });
+  renderPv();
+}
+function renderPv(){
+  const bs=S.menu.button||[];
+  $('pvBar').innerHTML=bs.map(b=>`<div>${esc(b.name||'（未命名）')}</div>`).join('')||'<div>（还没有菜单）</div>';
+  const withSub=bs.find(b=>(b.sub_button||[]).length);
+  $('pvSub').innerHTML=withSub?withSub.sub_button.map(s=>`<div>${esc(s.name||'')}</div>`).join(''):'<div class="dim" style="padding:10px">点一级菜单弹出的二级</div>';
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function up(i,j,k,v){const b=S.menu.button[i];if(j===null||j===undefined)b[k]=v;else b.sub_button[j][k]=v;renderPv()}
+function addTop(){if((S.menu.button||[]).length>=3){alert('一级菜单最多 3 个');return}S.menu.button.push({name:'新菜单',sub_button:[{type:'click',name:'子项一',key:'K1'},{type:'click',name:'子项二',key:'K2'}]});render()}
+function delTop(i){S.menu.button.splice(i,1);render()}
+function addSub(i){const b=S.menu.button[i];b.sub_button=b.sub_button||[];if(b.sub_button.length>=5){alert('二级最多 5 个');return}b.sub_button.push({type:'click',name:'新子项',key:'KEY'+Date.now()%1000});render()}
+function delSub(i,j){S.menu.button[i].sub_button.splice(j,1);render()}
+function renderErrs(errs){
+  $('errs').innerHTML=errs.length?errs.map(e=>`<div class="err">✗ ${esc(e)}</div>`).join(''):'<div class="ok">✓ 通过微信菜单规则校验</div>';
+}
+async function saveDraft(){const r=await api('/api/menu/draft',{menu:S.menu});S.menu=r.menu;render();renderErrs(r.errors||[]);alert('草稿已保存'+(r.errors.length?'（还有 '+r.errors.length+' 个校验问题）':''))}
+async function pushMenu(){const r=await api('/api/menu/push',{});$('pushOut').textContent=JSON.stringify(r,null,2);if(!r.ok)renderErrs(r.errors||[r.error]);}
+async function pullMenu(){const r=await api('/api/menu/pull');$('pushOut').textContent=JSON.stringify(r,null,2)}
+async function delMenu(){if(!confirm('确定删除线上菜单？'))return;const r=await api('/api/menu/delete',{});$('pushOut').textContent=JSON.stringify(r,null,2)}
+async function saveCfg(){const r=await api('/api/config',{wechat:{appid:$('appid').value,appsecret:$('appsecret').value,token:$('token').value},mode:$('cfgmode').value,public_base:$('public_base').value});$('mode').textContent=r.config.mode;$('mode').className='badge '+r.config.mode;$('base').textContent=r.config.public_base;alert('已保存')}
+async function showOauth(){const r=await api('/api/oauth?scope=snsapi_base');$('oauthOut').classList.remove('hide');$('oauthOut').textContent=r.url}
+function drvForm(){const d=$('driver').value;$('feieBox').classList.toggle('hide',d!=='feie');$('netBox').classList.toggle('hide',d!=='net');$('queueBox').classList.toggle('hide',d!=='queue');
+  $('drvHint').innerHTML={dryrun:'预览模式：不连打印机，把 ESC/POS 字节流和小票文本存到 data/prints/，用来先跑通下单→出票流程。',
+  feie:'云打印机（推荐）：打印机自己连 Wi-Fi，你的网站只要 POST 一个 HTTP 接口。不用域名、不用内网、断电不丢单。',
+  queue:'蓝牙打印机（Star TSP143IIIBi / 佳博 / 芯烨蓝牙款）用它：网站只管排队，店里设备拉单后走蓝牙或 USB 打。',
+  net:'网口小票机：TCP 9100 直发 ESC/POS 指令。需要和打印机同网段，外网要端口映射。蓝牙/USB 打印机网页调不到，得用手机 App。'}[d];}
+async function showJobs(){const r=await api('/api/jobs');$('printOut').textContent=JSON.stringify(r,null,2)}
+async function savePrinter(){const r=await api('/api/config',{printer:{driver:$('driver').value,width:parseInt($('width').value),copies:parseInt($('copies').value),feie:{user:$('f_user').value,ukey:$('f_ukey').value,sn:$('f_sn').value},net:{host:$('n_host').value,port:parseInt($('n_port').value)},queue:{agent_key:$('q_key').value,target:$('q_target').value}}});$('drv').textContent=r.config.printer.driver;alert('打印设置已保存')}
+async function saveShop(){await api('/api/config',{shop:{name:$('s_name').value,slogan:$('s_slogan').value,phone:$('s_phone').value,addr:$('s_addr').value,footer:$('s_footer').value},auto_print:$('auto_print').checked});alert('店铺信息已保存')}
+async function testPrint(){$('printOut').textContent='打印中…';const r=await api('/api/print/test',{});$('printOut').textContent=JSON.stringify(r,null,2)}
+async function loadOrders(){
+  const r=await api('/api/orders');const box=$('orders');box.innerHTML='';
+  (r.orders||[]).forEach(o=>{
+    const d=document.createElement('div');d.className='order';
+    d.innerHTML=`<div><b>${o.no}</b> <span class="dim">${o.created_at} · ￥${(o.total||0).toFixed(2)}</span>
+      ${o.last_print&&o.last_print.ok?'<span class="badge live">已打印</span>':'<span class="badge demo">未出票</span>'}</div>
+      <div class="dim">${(o.items||[]).map(i=>i.name+' x'+i.qty).join('、')}</div>
+      <div class="row" style="margin-top:8px"><button class="tiny" onclick="rcpt('${o.no}')">看小票</button>
+      <button class="tiny" onclick="reprint('${o.no}')">重打</button></div>`;
+    box.appendChild(d);
+  });
+  if(!(r.orders||[]).length)box.innerHTML='<div class="card dim">还没有订单，去点单页下一单试试。</div>';
+}
+async function rcpt(no){const r=await api('/api/receipt?no='+no);$('rcpt').textContent=r.ok?r.text:r.error}
+async function reprint(no){const r=await api('/api/order/reprint',{no});$('printOut').textContent=JSON.stringify(r,null,2);loadOrders()}
+const GUIDE=`【第 0 步 现在就能试】打开 /order 点几样菜下单 → 回「订单」看小票预览 → 打印设置里换驱动。
+
+【第 1 步 公众号】注册订阅号/服务号 → 微信公众平台「设置与开发 / 基本配置」拿 AppID+AppSecret，
+把服务器出口 IP 加进白名单（否则 access_token 会报 40164）。自定义菜单接口认证订阅号和服务号都能用。
+
+【第 2 步 公网回调】需要一个公网 HTTPS 域名指向本服务：
+  · 微信后台「服务器配置」URL 填 https://你的域名/wx ，Token 和这里填的一致
+  · 没域名时先用 cloudflared / frp 临时隧道调试，正式上线必须备案域名（微信内打开未备案域名会被拦）
+  · 本机自测：curl "http://127.0.0.1:8899/wx?signature=<sha1>&timestamp=1&nonce=1&echostr=hello" 能回 hello 就是通的
+
+【第 3 步 菜单】在这里编好 → 保存草稿 → 推送到微信 → 手机取关再关注一次看效果（菜单 24 小时内也会自动刷新）。
+
+【第 4 步 打印机】顺序建议：先 dryrun 跑通链路 → 再买飞鹅云打印机（约 200 元，接 Wi-Fi）填 USER/UKEY/SN → 下单自动出票。
+  飞鹅控制台：admin.feieyun.com；接口 POST http://api.feieyun.cn/Api/Open/ 参数 user/stime/sig(=sha1(user+UKEY+stime))/apiname=Open_printMsg/sn/content/times。
+
+【第 5 步 上线】把服务跑在公网服务器（或本机 + 隧道），下单页 /order 用网页授权拿 openid，订单落 JSON/数据库，
+一单多机（前台+后厨）就循环调多个 SN。`;
+boot();
+</script>
+</body>
+</html>

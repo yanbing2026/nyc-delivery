@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>在线点单 · 纽约送餐</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--line:#e4e7ec;--fg:#111;--dim:#6b7280;--pri:#c8321f;--ok:#15803d;--warn:#b45309}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding-bottom:104px}
+header{background:var(--pri);color:#fff;padding:14px}
+header h1{margin:0;font-size:19px}header .d{font-size:12px;opacity:.92;margin-top:2px}
+.seg{display:flex;gap:8px;padding:10px 12px;background:var(--card);border-bottom:1px solid var(--line)}
+.seg button{flex:1;min-height:46px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:15px;font-weight:600;color:var(--fg)}
+.seg button.on{background:var(--pri);border-color:var(--pri);color:#fff}
+.cat{font-size:13px;color:var(--dim);padding:12px 14px 4px;font-weight:600}
+.item{background:var(--card);display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.item .n{flex:1}.item .n b{display:block;font-size:16px}.item .n span{font-size:12px;color:var(--dim)}
+.price{color:var(--pri);font-weight:700;min-width:62px;text-align:right}
+.step{display:flex;align-items:center;gap:6px}
+.step button{width:44px;height:44px;border-radius:50%;border:1px solid var(--pri);background:#fff;color:var(--pri);font-size:22px;line-height:1}
+.step button.plus{background:var(--pri);color:#fff}
+.step span{min-width:26px;text-align:center;font-weight:600}
+.block{background:var(--card);padding:12px 14px;border-top:8px solid var(--bg)}
+label{display:block;font-size:13px;color:var(--dim);margin:10px 0 6px}
+input,textarea{width:100%;min-height:46px;padding:11px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:#fff;color:var(--fg)}
+.hint{font-size:12px;color:var(--dim);margin-top:4px}
+.cands{border:1px solid var(--line);border-radius:10px;margin-top:6px;overflow:hidden}
+.cands div{padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px}
+.cands div b{font-size:13px;color:var(--pri)}
+.tips{display:flex;gap:8px;flex-wrap:wrap}
+.tips button{min-height:46px;flex:1;min-width:76px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:15px}
+.tips button.on{background:#111;color:#fff;border-color:#111}
+#quote{background:#fffdf5;border:1px dashed #e0d9c0;border-radius:12px;padding:12px;margin-top:12px;font-size:15px}
+#quote .r{display:flex;justify-content:space-between;padding:3px 0}
+#quote .r.tot{border-top:1px solid #e0d9c0;margin-top:6px;padding-top:8px;font-weight:700;font-size:18px}
+#quote .r.tot span:last-child{color:var(--pri)}
+.msg{padding:10px 12px;border-radius:10px;font-size:14px;margin-top:10px}
+.msg.err{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.msg.warn{background:#fffbeb;color:var(--warn);border:1px solid #fde68a}
+.cash{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:10px;padding:10px 12px;font-size:14px;margin-top:6px}
+.bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:10px;align-items:center}
+.bar .tot{flex:1;font-size:14px}.bar .tot b{color:var(--pri);font-size:20px}
+.bar button{min-height:52px;padding:0 20px;border:0;border-radius:12px;background:var(--pri);color:#fff;font-size:16px;font-weight:700}
+.bar button:disabled{background:#c9ccd1}
+#done{position:fixed;inset:0;background:#fff;display:none;flex-direction:column;padding:18px;overflow:auto}
+#done.show{display:flex}
+#done h2{color:var(--ok);margin:8px 0}
+#done .rcpt{background:#fffdf5;border:1px dashed var(--line);border-radius:10px;padding:12px;overflow:auto}
+#done pre{font:12px/1.45 ui-monospace,Menlo,monospace;white-space:pre;margin:0}
+#done .big{font-size:20px;font-weight:700;margin:6px 0}
+#done button{margin-top:14px;min-height:50px;border:0;border-radius:12px;background:var(--pri);color:#fff;font-size:16px;font-weight:600}
+details{background:var(--card);border-top:8px solid var(--bg);padding:10px 14px}
+summary{font-size:14px;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="shopName">在线点单</h1>
+  <div class="d" id="shopLine">纽约 · 送餐 / 自取 · 现金支付</div>
+</header>
+<div class="seg">
+  <button id="mDelivery" class="on" onclick="setMode(false)">🛵 送餐</button>
+  <button id="mPickup" onclick="setMode(true)">🏬 到店自取</button>
+</div>
+
+<div id="menu"></div>
+
+<details>
+  <summary>⚙️ 设置（店址 / 配送费规则）—— 这是演示页，改成你自己的</summary>
+  <label>店址（用来算里程的起点）</label>
+  <input id="shop_addr" oninput="saveShopAddr()" value="40 Bayard St, New York, NY 10013">
+  <div class="hint" id="shopHint">解析中…</div>
+  <div class="hint">配送费规则：≤0.5 英里免 · ≤2 英里 $3 · ≤4 英里 $6 · ≤6 英里 $10 · 超出每英里 $2.5 · 最远 8 英里 · 起送 $20 · 纽约税 8.875%</div>
+</details>
+
+<div class="block">
+  <div id="deliveryBox">
+    <label>送餐地址（必须英文，从门牌号开始，带 5 位 ZIP）</label>
+    <input id="addr" placeholder="例：40 Bayard St, New York, NY 10013" oninput="onAddr()">
+    <div class="hint">纽约系统只认英文街名，中文地址搜不到。ZIP 很重要：同名街道在好几个区都有。</div>
+    <div class="cands" id="cands" style="display:none"></div>
+  </div>
+  <label>姓名</label><input id="cust" placeholder="例：张先生 / Mr. Zhang">
+  <label>电话</label><input id="phone" type="tel" placeholder="917-555-0123">
+  <label>备注</label><textarea id="remark" rows="2"></textarea>
+  <label>小费（给送餐员）</label><div class="tips" id="tips"></div>
+  <label>支付方式</label>
+  <div class="cash">💵 现金 Cash（送到付）—— 目前只收现金，请备好零钱</div>
+  <div id="msgs"></div>
+  <div id="quote"></div>
+</div>
+
+<div class="bar">
+  <div class="tot">合计 <b id="tot">$0.00</b><br><span class="hint" id="barHint">还没选菜</span></div>
+  <button id="submit" disabled>下单</button>
+</div>
+
+<div id="done">
+  <h2>✅ 下单成功</h2>
+  <div class="dim" id="doneMsg"></div>
+  <div class="big" id="doneNo"></div>
+  <div class="rcpt"><pre id="doneRcpt"></pre></div>
+  <button onclick="location.reload()">再点一单</button>
+</div>
+
+<script src="./wxmenu.js"></script>
+<script src="./delivery.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const DL=WXDelivery, D=DL.DEFAULT_DELIVERY;
+const MENU=[
+ {name:'招牌',items:[{id:'a1',name:'海蛎煎',en:'Oyster Omelette',desc:'现点现做',price:12.95},
+   {id:'a2',name:'红蟳米糕',en:'Steamed Rice w/ Crab',desc:'',price:32.95},
+   {id:'a3',name:'福州鱼丸汤',en:'Fuzhou Fish Ball Soup',desc:'',price:9.95}]},
+ {name:'小炒',items:[{id:'b1',name:'荔枝肉',en:'Lychee Pork',desc:'福州味',price:14.95},
+   {id:'b2',name:'糟菜炒粉干',en:'Rice Noodle w/ Pickled Veg',desc:'',price:12.95},
+   {id:'b3',name:'白灼虾',en:'Boiled Shrimp',desc:'按份',price:19.95},
+   {id:'b4',name:'蒜蓉炒青菜',en:'Chinese Broccoli',desc:'',price:11.95}]},
+ {name:'主食 / 汤',items:[{id:'c1',name:'锅边糊',en:'Rice Noodle Soup',desc:'',price:8.95},
+   {id:'c2',name:'福州拌面',en:'Fuzhou Lo Mein',desc:'',price:9.95},
+   {id:'c3',name:'白饭',en:'Steamed Rice',desc:'',price:2.0}]},
+ {name:'饮品',items:[{id:'d1',name:'茉莉花茶',en:'Jasmine Tea',desc:'一壶',price:3.95},
+   {id:'d2',name:'王老吉',en:'Herbal Tea',desc:'',price:2.5}]}
+];
+const SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 唐人街 30 分钟送达'};
+let cart={},pickup=false,tipRate=0,Q=null,acTimer=null,rest=null,backend=(localStorage.getItem('wxmenu_backend')||'').replace(/\/$/,'');
+const money=v=>'$'+Number(v||0).toFixed(2);
+const subtotal=()=>Math.round(MENU.reduce((s,g)=>s+g.items.reduce((t,it)=>t+(cart[it.id]||0)*it.price,0),0)*100)/100;
+const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
+
+async function boot(){
+  $('shopName').textContent=SHOP.name;
+  $('shopLine').textContent=`${SHOP.phone} · 最远 ${D.max_miles} 英里 · 起送 ${money(D.min_order)} · 现金支付`;
+  $('shop_addr').value=localStorage.getItem('wxmenu_shop_addr')||D.restaurant_addr;
+  renderTips();renderMenu();await resolveRest();
+  if(backend) $('shopLine').textContent += ' · 已连后端（下单会真发到店里）';
+}
+function msg(k,t){ $('msgs').innerHTML=`<div class="msg ${k}">${t}</div>` }
+function renderTips(){
+  $('tips').innerHTML=[0.15,0.18,0.20].map(r=>`<button class="${tipRate===r?'on':''}" onclick="setTip(${r})">${r*100}%</button>`).join('')
+    +`<button class="${tipRate===0?'on':''}" onclick="setTip(0)">不给</button>`
+    +`<button onclick="setTip(-1)">自定</button>`;
+}
+function setTip(r){ if(r<0){tipRate=Math.min(0.5,Math.max(0,(parseFloat(prompt('小费百分比','20'))||0)/100));}else tipRate=r; renderTips(); refresh(); }
+function setMode(p){ pickup=p; $('mDelivery').classList.toggle('on',!p); $('mPickup').classList.toggle('on',p);
+  $('deliveryBox').style.display=p?'none':'block'; refresh(); }
+function renderMenu(){
+  const box=$('menu'); box.innerHTML='';
+  MENU.forEach(g=>{
+    const h=document.createElement('div');h.className='cat';h.textContent=g.name;box.appendChild(h);
+    g.items.forEach(it=>{
+      const q=cart[it.id]||0,d=document.createElement('div');d.className='item';
+      d.innerHTML=`<div class="n"><b>${it.name}</b><span>${it.en}${it.desc?' · '+it.desc:''}</span></div>
+        <div class="price">${money(it.price)}</div>
+        <div class="step"><button class="minus" ${q?'':'disabled'}>−</button><span>${q}</span><button class="plus">+</button></div>`;
+      d.querySelector('.plus').onclick=()=>{cart[it.id]=(cart[it.id]||0)+1;renderMenu();refresh()};
+      d.querySelector('.minus').onclick=()=>{cart[it.id]=Math.max(0,(cart[it.id]||0)-1);renderMenu();refresh()};
+      box.appendChild(d);
+    });
+  });
+}
+const items=()=>{const o=[];MENU.forEach(g=>g.items.forEach(it=>{const q=cart[it.id]||0;if(q)o.push({name:it.name,qty:q,price:it.price})}));return o};
+
+async function resolveRest(){
+  const a=$('shop_addr').value.trim();
+  localStorage.setItem('wxmenu_shop_addr',a);
+  const r=await DL.geocode(a);
+  if(r.ok){ rest={lat:r.lat,lon:r.lon}; $('shopHint').innerHTML=`✓ 起点已定位：${r.label} (${r.borough||''} ${r.postalcode||''})`; }
+  else { rest=null; $('shopHint').innerHTML='✗ 店址解析失败：'+r.error; }
+  refresh();
+}
+function onAddr(){ clearTimeout(acTimer); acTimer=setTimeout(lookup,350); refresh(); }
+async function lookup(){
+  const q=$('addr').value.trim();
+  if(q.length<6||!/\d/.test(q)){ $('cands').style.display='none'; return; }
+  let list=[]; try{ list=await DL.geocodeCandidates(q,6); }catch(e){ return; }
+  list=list.filter(c=>c.postalcode);
+  if(!list.length){ $('cands').style.display='none'; return; }
+  $('cands').style.display='block';
+  $('cands').innerHTML=list.map((c,i)=>`<div onclick="pick(${i})"><b>${c.borough||''} ${c.postalcode||''}</b><br>${c.label}</div>`).join('');
+  window.__c=list;
+}
+function pick(i){ $('addr').value=window.__c[i].label.replace(/, USA$/,''); $('cands').style.display='none'; refresh(); }
+
+let qSeq=0;
+async function refresh(){
+  const c=count();
+  $('tot').textContent=money(subtotal())+' +';
+  if(!c){ $('quote').innerHTML=''; $('barHint').textContent='还没选菜'; $('submit').disabled=true; $('tot').textContent='$0.00'; return; }
+  if(!rest){ msg('err','店址还没解析成功，先在设置里填对店址'); $('submit').disabled=true; return; }
+  const seq=++qSeq;
+  const addr=$('addr').value.trim();
+  const q=await DL.quote(rest,addr,subtotal(),D,Math.max(0,tipRate),pickup);
+  if(seq!==qSeq) return;
+  Q=q;
+  $('tot').textContent=money(q.total);
+  $('quote').innerHTML=rows(q);
+  const probs=[];
+  if(!pickup){
+    const [okA,why]=DL.looksLikeAddress(addr);
+    if(!okA) probs.push(['warn',addr?('地址格式：'+why):'请填送餐地址，例如 40 Bayard St, New York, NY 10013']);
+    if(q.address&&q.address.warning) probs.push(['warn','提示：'+q.address.warning+'（不对的话，点上面候选里的正确地址）']);
+  }
+  if(q.ok===false) probs.push(['err',q.error]);
+  $('msgs').innerHTML=probs.map(p=>`<div class="msg ${p[0]}">${p[1]}</div>`).join('');
+  $('submit').disabled=!q.ok||c===0;
+  const dist=q.distance?Number(q.distance.miles).toFixed(1)+' 英里':'';
+  $('barHint').textContent=`${c} 件 · ${pickup?'到店自取':(dist||'待填地址')}`;
+}
+function rows(q){
+  const r=[`<div class="r"><span>小计</span><span>${money(q.subtotal)}</span></div>`];
+  if(q.tax) r.push(`<div class="r"><span>税 ${(q.tax_rate*100).toFixed(3)}%</span><span>${money(q.tax)}</span></div>`);
+  if(!pickup&&q.delivery) r.push(`<div class="r"><span>配送费 ${q.delivery.tier?'（'+q.delivery.tier+'）':''}</span><span>${q.delivery.fee==null?'—':money(q.delivery.fee)}</span></div>`);
+  if(q.tip) r.push(`<div class="r"><span>小费 ${Math.round(tipRate*100)}%</span><span>${money(q.tip)}</span></div>`);
+  if(q.distance&&!pickup) r.push(`<div class="r"><span>距离 / 预计送达</span><span>${Number(q.distance.miles).toFixed(2)} 英里 · ${q.eta_minutes||'—'} 分钟</span></div>`);
+  r.push(`<div class="r tot"><span>合计（现金）</span><span>${money(q.total)}</span></div>`);
+  return r.join('');
+}
+
+$('submit').onclick=async()=>{
+  $('submit').disabled=true; $('submit').textContent='提交中…';
+  const body={items:items(),pickup,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
+    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:D.payment[0],
+    address:pickup?'':$('addr').value.trim(),source:'pages-delivery'};
+  let order=null,printMsg='';
+  if(backend){
+    try{
+      const r=await fetch(backend+'/api/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
+      if(!r.ok){ $('msgs').innerHTML=`<div class="msg err">${r.error||'下单失败'}</div>`; $('submit').disabled=false; $('submit').textContent='下单'; return; }
+      order=r.order; printMsg=r.print&&r.print.ok?`小票已打印（${r.print.driver}）`:`打印未成功：${(r.print&&(r.print.error||r.print.mode))||'未知'}`;
+    }catch(e){ $('msgs').innerHTML=`<div class="msg err">连不上后端：${e.message}</div>`; $('submit').disabled=false; $('submit').textContent='下单'; return; }
+  }else{
+    order={no:'D'+Date.now().toString().slice(-10),created_at:new Date().toLocaleString('zh-CN'),
+      customer:body.customer,phone:body.phone,address:Q.address?Q.address.matched:body.address,pickup,
+      remark:body.remark,items:body.items,subtotal:Q.subtotal,tax:Q.tax,tax_rate:Q.tax_rate,tip:Q.tip,
+      delivery_fee:Q.delivery_fee,total:Q.total,eta_minutes:Q.eta_minutes,pay_type:body.pay_type,
+      distance_miles:Q.distance?Q.distance.miles:null};
+    printMsg='这是演示页：没有真打印机。接上后端（设置里填地址）就会真出票。';
+  }
+  $('doneNo').textContent='订单号 '+order.no;
+  $('doneMsg').textContent=`${printMsg} ${pickup?'请到店取餐。':'送餐约 '+(order.eta_minutes||'?')+' 分钟。'} 请备好现金 ${money(order.total)}。`;
+  $('doneRcpt').textContent=WXMenu.renderReceipt(order,{name:SHOP.name,slogan:SHOP.slogan,phone:SHOP.phone,footer:'谢谢惠顾|现金支付'},32);
+  $('done').classList.add('show');
+};
+boot();
+</script>
+</body>
+</html>
