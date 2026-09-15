@@ -25,18 +25,18 @@
 ## 跑测试（全部无需密钥，但需要联网调纽约官方地址/路线接口）
 
 ```bash
-./run_tests.sh
+./run_tests.sh          # 一次跑完 7 个套件，共 245 项检查
 ```
 
-明细：
+明细（也可以单独跑）：
 
 ```bash
-cd backend && python3 selftest.py            # 38 项：签名/菜单规则/小票/ESC-POS 字节/HTTP 全链路/队列
-cd backend && python3 test_delivery.py       # 33 项：真调 NYC GeoSearch + OSRM，里程/配送费/税/小费
-cd backend && node test-order-page.js        # 37 项：DOM 桩把页面脚本跑在真后端上（含真下单真出票）
-cd docs    && node test-wxmenu.js            # 24 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
-cd docs    && node test-delivery.js          # 27 项：前端里程模块（与后端公式对齐）
-cd docs    && node test-order-page-static.js # 37 项：Pages 版点单页（浏览器内算里程）
+cd backend && python3 selftest.py            # 48 项：签名/菜单规则/小票/ESC-POS 字节/HTTP 全链路/打印队列
+cd backend && python3 test_delivery.py       # 39 项：真调 NYC GeoSearch + OSRM，里程/配送费/税/小费/自取
+cd backend && node test-order-page.js        # 38 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
+cd docs    && node test-wxmenu.js            # 23 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
+cd docs    && node test-delivery.js          # 31 项：前端里程模块（与后端公式对齐）
+cd docs    && node test-order-page-static.js # 20 项：Pages 版点单页（浏览器内算里程）
 cd worker  && node test_worker.mjs           # 46 项：Worker 全链路（真实 SQL + 真实地址/路线）
 ```
 
