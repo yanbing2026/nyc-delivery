@@ -305,7 +305,44 @@ for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)
 const rl = await call("/api/order", { method: "POST", body: { items: MENU, pickup: true } });
 check("刷单被挡 429", rl.status === 429 && /太频繁/.test(rl.data.error), rl.data.error);
 
-console.log("== 9. 未知接口 / CORS ==");
+console.log("== 9. 老客取回（/api/lookup，只凭手机号） ==");
+{
+  // 上一节故意把额度刷满了，这里先清掉，否则自己的下单会被 429 挡掉
+  db.prepare("DELETE FROM hits").run();
+  // 先下一单自取（不用地址，也就不依赖 Google key）
+  const ok = await call("/api/order", { method: "POST", body: {
+    items: [{ id: MENU[0].id, qty: 2 }], pickup: true, customer: "张先生", phone: "(917) 555-0123", tip_rate: 0,
+  }});
+  check("测试单下成功", ok.data.ok === true, ok.data.error);
+
+  const miss = await call("/api/lookup", { method: "POST", body: { phone: "0000000000" } });
+  check("没来过的号码 → found:false（不报错）", miss.data.ok === true && miss.data.found === false, miss.data);
+
+  const short = await call("/api/lookup", { method: "POST", body: { phone: "123" } });
+  check("号码太短 → 400 明确提示", short.status === 400 && /手机号/.test(short.data.error), short.data.error);
+
+  // 关键：顾客当初写的是 (917) 555-0123，取回时用 9175550123 或 917-555-0123 都要能匹配
+  for (const p of ["9175550123", "917-555-0123", "(917) 555 0123"]) {
+    const hit = await call("/api/lookup", { method: "POST", body: { phone: p } });
+    check("号码写法 " + p + " 能取回", hit.data.found === true && hit.data.name === "张先生", hit.data);
+  }
+
+  const info = (await call("/api/lookup", { method: "POST", body: { phone: "9175550123" } })).data;
+  check("带回来过次数", info.orders >= 1, info.orders);
+  check("带回上一单的菜（给再来一单用）", Array.isArray(info.last_order?.items) && info.last_order.items[0].id === MENU[0].id,
+    info.last_order);
+  check("不回传多余字段（没有完整历史/没有其他顾客）", info.recent.length <= 3 && info.address !== undefined, Object.keys(info));
+
+  // 限流：和下单共用 hits 表，取回上限是 60/小时
+  db.prepare("DELETE FROM hits").run();
+  for (let i = 0; i < 60; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));
+  const rl2 = await call("/api/lookup", { method: "POST", body: { phone: "9175550123" } });
+  check("刷取回被挡 429", rl2.status === 429, rl2.data.error);
+  db.prepare("DELETE FROM hits").run();
+  if (ok.data.order?.no) db.prepare("DELETE FROM orders WHERE id = ?").run(ok.data.order.no);
+}
+
+console.log("== 10. 未知接口 / CORS ==");
 check("404 带说明", (await call("/api/nope")).status === 404);
 const pre = await worker.fetch(new Request("https://api.example.com/api/order", { method: "OPTIONS" }), env);
 check("预检 OPTIONS 返回 204 + CORS 头", pre.status === 204 && pre.headers.get("access-control-allow-origin") === "*",

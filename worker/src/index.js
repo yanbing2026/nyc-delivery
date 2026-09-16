@@ -74,6 +74,51 @@ const publicOrder = (r) => ({
   cash_collected: r.cash_collected,
 });
 
+// 老客取回：只凭手机号，不做验证（店里定的方案 A —— 网页只收现金，没有支付信息，
+// 拿手机号能看到的只有"这个人以前叫什么/送哪"）。所以这里只回最少的东西：
+// 姓名 + 最近一次地址 + 来过几次 + 上一单的菜（用于"再来一单"），不回全部历史。
+// 号码先归一化成纯数字再比：顾客可能写 917-555-0123 或 (917) 555 0123。
+const digitsOf = (s) => String(s || "").replace(/[^0-9]/g, "").slice(0, 15);
+
+async function lookupCustomer(env, body, ip) {
+  const want = digitsOf(body && body.phone);
+  if (want.length < 10) return json({ ok: false, error: "请填完整手机号（10 位以上数字）" }, 400);
+  if (await rateLimited(env, ip, 60)) return json({ ok: false, error: "查询太频繁，请过一会儿再试" }, 429);
+
+  // 库里存的是顾客当初写的原样号码，所以这里用去符号后的等值比较（单店数据量，不用索引也够快）
+  const norm = "REPLACE(REPLACE(REPLACE(REPLACE(phone,'-',''),' ',''),'(',''),')','')";
+  const rows = await env.DB.prepare(
+    `SELECT id, created_at, customer, address, borough, items, total, status, pickup
+       FROM orders WHERE ${norm} = ?1 ORDER BY created_at DESC LIMIT 5`
+  ).bind(want).all();
+  const list = rows.results || [];
+  if (!list.length) return json({ ok: true, found: false });
+
+  const cnt = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM orders WHERE ${norm} = ?1`
+  ).bind(want).first();
+  const last = list[0];
+  const parseItems = (s) => { try { return JSON.parse(s || "[]"); } catch (e) { return []; } };
+  return json({
+    ok: true, found: true,
+    name: String(last.customer || "").slice(0, 60),
+    address: String(last.address || "").slice(0, 200),
+    borough: String(last.borough || ""),
+    orders: Number(cnt && cnt.n) || list.length,
+    last_at: last.created_at,
+    // 上一单（给"再来一单"用：只给 id 和数量，价格以菜单当前价为准）
+    last_order: {
+      no: last.id, total: last.total, status: last.status, pickup: !!last.pickup,
+      created_at: last.created_at,
+      items: parseItems(last.items).map((i) => ({ id: i.id, name: i.name, qty: i.qty })).slice(0, 40),
+    },
+    recent: list.slice(0, 3).map((r) => ({
+      no: r.id, created_at: r.created_at, total: r.total, status: r.status,
+      count: parseItems(r.items).length, pickup: !!r.pickup,
+    })),
+  });
+}
+
 async function createOrder(env, body, ip) {
   const asked = Array.isArray(body.items) ? body.items : [];
   if (!asked.length) return json({ ok: false, error: "购物车是空的" }, 400);
@@ -154,6 +199,8 @@ export default {
       if (p === "/api/autocomplete")
         return json({ ok: true, items: await D.geocodeCandidates(url.searchParams.get("q") || "", 6, env.GOOGLE_MAPS_API_KEY) });
 
+      if (p === "/api/lookup" && request.method === "POST")
+        return lookupCustomer(env, await request.json().catch(() => ({})), ip);
       if (p === "/api/order" && request.method === "POST")
         return await createOrder(env, await request.json().catch(() => ({})), ip);
 

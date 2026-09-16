@@ -16,6 +16,7 @@
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
+| `worker/src/index.js` | Worker 路由：`/api/config`、`/api/quote`、`/api/autocomplete`、`/api/order`、**`/api/lookup`（老客取回，只凭手机号）**、`/api/agent/*`（取单/回写）、`/api/report/*`、`/api/pos/publish` |
 | `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key。店名/电话/菜单全从后端读（内容来自 TabPOS 的发布） | 推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs`，站点根就是它 |
 | `docs/order.html` | 老链接的跳转页（转到 `./`），之前发出去的 `/order.html` 不会失效 | — |
 | `worker/` | **线上后端**：下单/取单/回写/日报汇总。Cloudflare Worker + D1，免费档 10 万请求/天 | 见 `worker/README.md`（4 条 wrangler 命令） |
