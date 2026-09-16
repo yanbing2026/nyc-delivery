@@ -1,8 +1,10 @@
-/* 用 DOM 桩在 Node 里跑 Pages 版点单页（浏览器内算里程版），调真 GeoSearch + OSRM。
+/* 用 DOM 桩在 Node 里跑 Pages 版点单页。
+   页面现在的职责：收集地址、显示后端算出来的运费 —— 所以这里把 fetch 打成桩，
+   不依赖任何线上地址服务（geosearch 长期 503、Nominatim 429 都不会再影响这一套）。
    跑法：node test-order-page-static.js */
 const fs = require('fs');
 const path = require('path');
-const D = require('./delivery.js');
+const D = require('./delivery.js');        // 只用来对拍"后端算出来的运费"是否合规
 let fails = 0;
 const check = (n, c, e) => { console.log((c ? '  ✓ ' : '  ✗ ') + n + (c || e === undefined ? '' : '  ← ' + e)); if (!c) fails++; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -29,6 +31,54 @@ const store = {};
 globalThis.localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
 globalThis.prompt = () => '25';
 
+/* ---------- 后端桩：唯一"算运费"的地方 ---------- */
+const BACKEND = 'https://shop-backend.test';
+localStorage.setItem('wxmenu_backend', BACKEND);
+const CFG = { enabled: true, free_miles: 5, tiers: [], per_mile_beyond: 2.0, max_miles: 0,
+  min_order: 20.0, tax_rate: 0.08875, prep_minutes: 20, tip_options: [0.15, 0.18, 0.2],
+  payment: ['现金 Cash（送到付）'], restaurant_addr: '10-53 116th St, Flushing, NY 11356',
+  restaurant: { lat: 40.7873972, lon: -73.8511667 }, fallback_fee: 5.0 };
+const MILES = 5.56;                        // 固定里程，模拟后端 Google+OSRM 的结果
+const calls = [];
+const money2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+globalThis.fetch = async (u) => {
+  const url = String(u);
+  calls.push(url);
+  const reply = (obj) => ({ ok: true, status: 200, json: async () => obj });
+  if (url.startsWith(BACKEND + '/api/config')) return reply({ ok: true, at: 'stub', config: CFG });
+  if (url.startsWith(BACKEND + '/api/autocomplete'))
+    return reply({ ok: true, items: [{ label: '59-04 99th St, Flushing, NY 11368, USA', name: '', borough: 'Queens',
+      postalcode: '11368', lat: 40.7499, lon: -73.8636, source: 'google' }] });
+  if (url.startsWith(BACKEND + '/api/quote')) {
+    const p = new URL(url).searchParams;
+    const subtotal = money2(p.get('subtotal'));
+    const tipRate = Number(p.get('tip_rate') || 0);
+    const pickup = p.get('pickup') === '1';
+    const miles = pickup ? 0 : MILES;
+    const fee = D.deliveryFee(miles, CFG).fee;
+    const tax = money2(subtotal * CFG.tax_rate);
+    const tip = money2(subtotal * tipRate);
+    return reply({ ok: true, subtotal, pickup, tax_rate: CFG.tax_rate, min_order: CFG.min_order,
+      address: pickup ? null : { input: '59-04 99th St, Corona, NY 11368',
+        matched: '59-04 99th St, Flushing, NY 11368, USA', borough: 'Queens', zip: '11368',
+        lat: 40.7499, lon: -73.8636, source: 'google' },
+      distance: pickup ? null : { ok: true, miles, minutes: 13, source: 'osrm' },
+      delivery: pickup ? { ok: true, fee: 0, miles: 0, tier: '到店自取' }
+        : { ok: true, miles, fee, tier: `${CFG.free_miles} 英里 $0.00 + 超出 ${Math.ceil(miles - CFG.free_miles)} 英里 × $${CFG.per_mile_beyond}/英里` },
+      tax, tip, delivery_fee: fee, eta_minutes: pickup ? CFG.prep_minutes : CFG.prep_minutes + 13,
+      ok: true, total: money2(subtotal + tax + tip + fee) });
+  }
+  if (url.startsWith(BACKEND + '/api/order')) {
+    const body = JSON.parse(arguments[1] && arguments[1].body ? arguments[1].body : '{}');
+    return reply({ ok: true, order: { no: '260916000000001', created_at: '2026-09-16 01:00:00',
+      customer: body.customer, phone: body.phone, address: '59-04 99th St, Flushing, NY 11368, USA',
+      items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: 5.02, delivery_fee: 2,
+      total: 37.4, eta_minutes: 33, pay_type: CFG.payment[0], pickup: !!body.pickup, distance_miles: MILES },
+      print: { ok: true, driver: 'stub' } });
+  }
+  throw new Error('未打桩的请求：' + url);
+};
+
 (async () => {
   const dir = __dirname;
   eval(fs.readFileSync(path.join(dir, 'wxmenu.js'), 'utf8'));
@@ -36,84 +86,70 @@ globalThis.prompt = () => '25';
   const html = fs.readFileSync(path.join(dir, 'order.html'), 'utf8');
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   const code = scripts[scripts.length - 1].replace(/\bboot\(\);\s*$/, '');
-  eval(code + `\n;globalThis.__T={boot,refresh,cart,MENU,setMode,setTip,setAddr:(v)=>{$('addr').value=v;onAddr()},submit(){ $('submit').onclick(); },resolveRest,
-    get Q(){return Q}, get rest(){return rest}, get pickup(){return pickup} };`);
+  eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,cart,MENU,setMode,setTip,setAddr:(v)=>{$('addr').value=v;onAddr()},submit(){ $('submit').onclick(); },
+    get Q(){return Q}, get cfg(){return cfg}, get pickup(){return pickup} };`);
   const T = globalThis.__T;
 
-  console.log('== 1. 启动（浏览器内解析店址，调真 GeoSearch） ==');
+  console.log('== 1. 启动：读后端配置（页面自己不算钱） ==');
   await T.boot();
-  await sleep(2500);
-  await T.resolveRest();
-  // 免费地址服务解不出店址（Queens 连字符门牌号）时必须退回内置坐标，而不是把页面卡死
-  check('店址一定有可用坐标（解析成功或退回内置）', !!T.rest && T.rest.lat > 40.7, T.rest);
-  check('设置区说明定位结果（成功 或 已用内置坐标）',
-    /起点已定位|已用内置坐标/.test(els['shopHint'].innerHTML), els['shopHint'].innerHTML);
+  await sleep(50);
+  check('店址与规则来自后端', els['shopHint'].innerHTML.includes('10-53 116th St') && els['shopHint'].innerHTML.includes('免费'),
+    els['shopHint'].innerHTML);
+  check('起送价显示在后端信息里', els['shopLine'].textContent.includes('起送'), els['shopLine'].textContent);
   check('菜单渲染', (els['menu'].children || []).length >= 8, (els['menu'].children || []).length);
-  check('现金支付文案', html.includes('目前只收现金'));
+  check('启动没有发任何"本地解析地址"的请求（只问了 /api/config）',
+    calls.length === 1 && calls[0].includes('/api/config'), calls);
 
-  console.log('== 2. 选菜 ==');
+  console.log('== 2. 选菜 → 向后端要报价 ==');
   els['menu'].children[1].querySelector('.plus').onclick();
   els['menu'].children[1].querySelector('.plus').onclick();
   els['menu'].children[2].querySelector('.plus').onclick();
-  await sleep(200);
-  check('3 件菜', T.count === undefined ? Object.values(T.cart).reduce((a, b) => a + b, 0) === 3 : true, T.cart);
-
-  // 与 test-delivery.js 同理：免费地址服务会挂（503）也会限流（429）。生产路径是
-  // Worker + Google，这一套测的是浏览器兜底实现，拿不到地址服务时跳过依赖真实解析的断言。
-  const LIVE = !!(await D.geocode('40 Bayard St, New York, NY 10013').catch(() => ({ ok: false }))).ok;
-  const liveCheck = (n, c, e) => {
-    if (LIVE) check(n, c, e);
-    else console.log('  ⤵ ' + n + '（跳过：免费地址服务当前不可用）');
-  };
-  if (!LIVE) console.log('  ⚠ 免费地址服务当前不可用，真实解析相关断言本次跳过');
-
-  console.log('== 3. 填地址 → 浏览器内算里程与配送费（真 OSRM） ==');
-  T.setAddr('136-20 Roosevelt Ave, Flushing, NY 11354');
-  await sleep(3200);
+  T.setAddr('59-04 99th St, Corona, NY 11368');
+  await sleep(500);
   await T.refresh();
-  const q = LIVE ? T.Q : null;
-  liveCheck('报价成功', !!q && q.ok === true, q && q.error);
-  liveCheck('解析到 11354', !!q && !!q.address && q.address.zip === '11354', q && q.address);
-  liveCheck('配送费与实测里程一致',
-    !!q && q.ok === true && q.delivery_fee === D.deliveryFee(q.distance.miles, D.DEFAULT_DELIVERY).fee,
-    q && q.distance && [q.distance.miles, q.delivery_fee]);
-  liveCheck('税 = 小计 × 8.875%（与后端同一公式）',
-    !!q && q.ok === true && q.tax === Math.round(q.subtotal * 0.08875 * 100) / 100, q && [q.tax, q.subtotal]);
-  liveCheck('预计送达有值', !!q && q.ok === true && q.eta_minutes > 0, q && q.eta_minutes);
-  liveCheck('底栏显示英里', !!q && q.ok === true && els['barHint'].textContent.includes('英里'), els['barHint'].textContent);
-  const beforeTip = q && q.total;
+  const q = T.Q;
+  check('报价请求打到了后端 /api/quote', calls.some((c) => c.includes('/api/quote?')), calls.slice(-2));
+  check('后端返回的运费被采纳（5.56 英里 → $2）', q && q.delivery_fee === 2, q && q.delivery_fee);
+  check('运费与规则自洽（页面不重算）', q && q.delivery_fee === D.deliveryFee(5.56, CFG).fee, q && [q.delivery_fee]);
+  check('合计按后端返回显示', q && els['tot'].textContent === '$' + q.total.toFixed(2), [q && q.total, els['tot'].textContent]);
+  check('报价区列出配送费与距离', els['quote'].innerHTML.includes('配送费') && els['quote'].innerHTML.includes('英里'), els['quote'].innerHTML.slice(0, 150));
+  check('底栏显示件数与英里', els['barHint'].textContent.includes('件') && els['barHint'].textContent.includes('英里'), els['barHint'].textContent);
+  check('下单按钮可用', els['submit'].disabled === false);
+
+  console.log('== 3. 小费 / 自取 ==');
+  const beforeTip = T.Q.total;
   T.setTip(0.18);
-  await sleep(600);
+  await sleep(400);
   await T.refresh();
-  liveCheck('18% 小费加进合计', !!T.Q && T.Q.tip > 0 && T.Q.total > beforeTip, T.Q && [T.Q.tip, T.Q.total]);
-
-  console.log('== 4. 下单（静态模式：本地生成小票） ==');
-  els['cust'].value = '张先生'; els['phone'].value = '917-555-0123';
-  if (LIVE) {
-    await T.submit();
-    await sleep(600);
-  } else {
-    console.log('  ⤵ 下单/小票相关断言（跳过：解析不出地址时按钮本就是禁用的）');
-  }
-  liveCheck('接单页弹出', els['done']._cls.has('show'), [...els['done']._cls]);
-  liveCheck('小票含送餐地址', els['doneRcpt'].textContent.includes('ROOSEVELT'), els['doneRcpt'].textContent.slice(0, 120));
-  liveCheck('小票含税/配送费/小费', ['税', '配送费', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent.slice(0, 120));
-  liveCheck('提示备好现金', els['doneMsg'].textContent.includes('现金'), els['doneMsg'].textContent);
-  liveCheck('提示这是演示（没有真打印机）', els['doneMsg'].textContent.includes('演示'), els['doneMsg'].textContent);
-
-  console.log('== 5. 自取 / 远距离 / 中文地址 ==');
-  T.setMode(true); await sleep(900);
-  check('自取免配送费（自取不算里程，与地址服务无关）', !!T.Q && T.Q.delivery_fee === 0, T.Q && T.Q.delivery_fee);
+  check('18% 小费由后端加进合计', T.Q.tip > 0 && T.Q.total > beforeTip, [T.Q.tip, T.Q.total]);
+  T.setMode(true);
+  await sleep(300);
+  await T.refresh();
+  check('自取：请求带 pickup=1，运费 $0', T.Q.delivery_fee === 0 && calls.some((c) => c.includes('pickup=1')),
+    T.Q.delivery_fee);
   T.setMode(false);
-  T.setAddr('1 Pike St, New York, NY 10002');
-  await sleep(3200); await T.refresh();
-  liveCheck('下东城十几英里 → 不设上限，照算能送',
-    !!T.Q && T.Q.ok === true && T.Q.delivery_fee === D.deliveryFee(T.Q.distance.miles, D.DEFAULT_DELIVERY).fee,
-    T.Q && [T.Q.distance && T.Q.distance.miles, T.Q.delivery_fee]);
-  T.setAddr('法拉盛 缅街 41-28'); await sleep(600); await T.refresh();
-  check('中文地址提示用英文（规则校验，不走地址服务）', els['msgs'].innerHTML.includes('英文街名'), els['msgs'].innerHTML.slice(0, 80));
+  await sleep(300);
+  await T.refresh();
+
+  console.log('== 4. 下单（真发到后端） ==');
+  els['cust'].value = '张先生'; els['phone'].value = '917-555-0123';
+  await T.submit();
+  await sleep(50);
+  check('订单发到了后端 /api/order', calls.some((c) => c.includes('/api/order')), calls.slice(-2));
+  check('接单页弹出', els['done']._cls.has('show'), [...els['done']._cls]);
+  // 大小写按后端返回的原样（Google 给的是混合大小写，不再强制大写）
+  check('小票含后端返回的送餐地址', /99th st/i.test(els['doneRcpt'].textContent), els['doneRcpt'].textContent.replace(/\n/g, ' | ').slice(0, 200));
+  check('小票含税/配送费/小费', ['税', '配送费', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent.slice(0, 120));
+  check('提示备好现金', els['doneMsg'].textContent.includes('现金'), els['doneMsg'].textContent);
+  check('提示打印结果来自后端', els['doneMsg'].textContent.includes('小票已打印'), els['doneMsg'].textContent);
+
+  console.log('== 5. 地址格式提示（纯本地规则，不联网） ==');
+  T.setAddr('法拉盛 缅街 41-28');
+  await sleep(400);
+  await T.refresh();
+  check('中文地址提示用英文街名', els['msgs'].innerHTML.includes('英文街名'), els['msgs'].innerHTML.slice(0, 100));
 
   console.log();
   if (fails) { console.log('❌ ' + fails + ' 项失败'); process.exit(1); }
-  console.log('✅ Pages 版点单页全部通过');
+  console.log('✅ Pages 版点单页（后端桩）全部通过');
 })();

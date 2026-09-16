@@ -68,10 +68,9 @@ summary{font-size:14px;color:var(--dim)}
 
 <details>
   <summary>⚙️ 设置（店址 / 配送费规则）—— 这是演示页，改成你自己的</summary>
-  <label>店址（用来算里程的起点）</label>
-  <input id="shop_addr" oninput="saveShopAddr()" value="10-53 116th St, Flushing, NY 11356">
-  <div class="hint" id="shopHint">解析中…</div>
-  <div class="hint">配送费规则：5 英里内免费 · 超出每英里 $2（不足 1 英里按 1 英里算）· 起送 $20 · 纽约税 8.875%</div>
+  <label>店址 / 配送费规则（由后端配置，这里只读）</label>
+  <div class="hint" id="shopHint">正在读后端配置…</div>
+  <div class="hint">运费、里程、预计送达一律由店里服务器计算后回传，页面只负责显示 —— 规则改了只改后端一处。</div>
 </details>
 
 <div class="block">
@@ -124,17 +123,35 @@ const MENU=[
    {id:'d2',name:'王老吉',en:'Herbal Tea',desc:'',price:2.5}]}
 ];
 const SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 唐人街 30 分钟送达'};
-let cart={},pickup=false,tipRate=0,Q=null,acTimer=null,rest=null,backend=(localStorage.getItem('wxmenu_backend')||'').replace(/\/$/,'');
+// 运费一律由后端算；默认就指向线上 Worker，本地调试时用 localStorage('wxmenu_backend') 覆盖
+const DEFAULT_BACKEND='https://nyc-delivery-orders.yanbing2004.workers.dev';
+let cart={},pickup=false,tipRate=0,Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
 const money=v=>'$'+Number(v||0).toFixed(2);
 const subtotal=()=>Math.round(MENU.reduce((s,g)=>s+g.items.reduce((t,it)=>t+(cart[it.id]||0)*it.price,0),0)*100)/100;
 const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
 
 async function boot(){
   $('shopName').textContent=SHOP.name;
-  $('shopLine').textContent=`${SHOP.phone}${D.max_miles>0?` · 最远 ${D.max_miles} 英里`:''} · 起送 ${money(D.min_order)} · 现金支付`;
-  $('shop_addr').value=localStorage.getItem('wxmenu_shop_addr')||D.restaurant_addr;
-  renderTips();renderMenu();await resolveRest();
-  if(backend) $('shopLine').textContent += ' · 已连后端（下单会真发到店里）';
+  renderTips();renderMenu();
+  if(!backend){
+    $('shopLine').textContent=`${SHOP.phone} · 未连接后端`;
+    $('shopHint').innerHTML='未连接后端：运费由店里服务器计算，请在菜单编辑页填上后端地址';
+    msg('err','未连接后端 —— 先在菜单编辑页填上后端地址，页面才能报价');
+    refresh(); return;
+  }
+  await reloadConfig();
+  refresh();
+}
+async function reloadConfig(){
+  try{
+    const c=await fetch(backend+'/api/config').then(r=>r.json());
+    cfg=c.config;
+    $('shopLine').textContent=`${SHOP.phone} · 起送 ${money(cfg.min_order)} · 现金支付 · 运费由店里服务器计算`;
+    $('shopHint').innerHTML=`✓ 店址：${cfg.restaurant_addr}<br>✓ 规则：${cfg.free_miles} 英里内免费 · 超出每英里 ${money(cfg.per_mile_beyond)}`
+      +`${cfg.max_miles>0?` · 最远 ${cfg.max_miles} 英里`:' · 不设距离上限'}`;
+  }catch(e){
+    $('shopHint').innerHTML='⚠ 读不到后端配置：'+(e.message||e);
+  }
 }
 function msg(k,t){ $('msgs').innerHTML=`<div class="msg ${k}">${t}</div>` }
 function renderTips(){
@@ -162,25 +179,13 @@ function renderMenu(){
 }
 const items=()=>{const o=[];MENU.forEach(g=>g.items.forEach(it=>{const q=cart[it.id]||0;if(q)o.push({name:it.name,qty:q,price:it.price})}));return o};
 
-async function resolveRest(){
-  const a=$('shop_addr').value.trim();
-  localStorage.setItem('wxmenu_shop_addr',a);
-  const r=await DL.geocode(a).catch(e=>({ok:false,error:e.message||String(e)}));
-  if(r.ok){ rest={lat:r.lat,lon:r.lon}; $('shopHint').innerHTML=`✓ 起点已定位：${r.label} (${r.borough||''} ${r.postalcode||''})`; }
-  else {
-    // 免费地址服务解不了这个地址（比如 Queens 那种 10-53 连字符门牌号）时，
-    // 退回页面内置的店坐标继续算——店址坐标本来就随配置下发，不该因此把整页卡死
-    rest={lat:D.restaurant.lat,lon:D.restaurant.lon};
-    $('shopHint').innerHTML=`⚠ 店址解析失败（${r.error}），已用内置坐标 ${D.restaurant.lat.toFixed(4)},${D.restaurant.lon.toFixed(4)}`
-      +(a===D.restaurant_addr?'':'（你填的地址与内置的不一致，里程可能有偏差）');
-  }
-  refresh();
-}
+// 店址解析、里程、配送费全部在后端算（页面不再本地计算，也不需要任何 key）
 function onAddr(){ clearTimeout(acTimer); acTimer=setTimeout(lookup,350); refresh(); }
 async function lookup(){
   const q=$('addr').value.trim();
   if(q.length<6||!/\d/.test(q)){ $('cands').style.display='none'; return; }
-  let list=[]; try{ list=await DL.geocodeCandidates(q,6); }catch(e){ return; }
+  if(!backend){ $('cands').style.display='none'; return; }
+  let list=[]; try{ list=await fetch(backend+'/api/autocomplete?q='+encodeURIComponent(q)).then(r=>r.json()).then(d=>d.items||[]); }catch(e){ return; }
   list=list.filter(c=>c.postalcode);
   if(!list.length){ $('cands').style.display='none'; return; }
   $('cands').style.display='block';
@@ -194,10 +199,15 @@ async function refresh(){
   const c=count();
   $('tot').textContent=money(subtotal())+' +';
   if(!c){ $('quote').innerHTML=''; $('barHint').textContent='还没选菜'; $('submit').disabled=true; $('tot').textContent='$0.00'; return; }
-  if(!rest){ msg('err','店址还没解析成功，先在设置里填对店址'); $('submit').disabled=true; return; }
+  if(!backend){ msg('err','未连接后端：运费由店里服务器计算，先在菜单编辑页填上后端地址'); $('submit').disabled=true; $('quote').innerHTML=''; return; }
   const seq=++qSeq;
   const addr=$('addr').value.trim();
-  const q=await DL.quote(rest,addr,subtotal(),D,Math.max(0,tipRate),pickup);
+  let q;
+  try{
+    const u=`${backend}/api/quote?subtotal=${subtotal()}&tip_rate=${Math.max(0,tipRate)}`
+      +(pickup?'&pickup=1':'&address='+encodeURIComponent(addr));
+    q=await fetch(u).then(r=>r.json());
+  }catch(e){ q={ok:false,error:'连不上后端：'+(e.message||e)}; }
   if(seq!==qSeq) return;
   Q=q;
   $('tot').textContent=money(q.total);
@@ -230,6 +240,10 @@ $('submit').onclick=async()=>{
     remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:D.payment[0],
     address:pickup?'':$('addr').value.trim(),source:'pages-delivery'};
   let order=null,printMsg='';
+  if(!backend){
+    $('msgs').innerHTML='<div class="msg err">未连接后端，无法下单（运费和订单都由店里服务器处理）</div>';
+    $('submit').disabled=false; $('submit').textContent='下单'; return;
+  }
   if(backend){
     try{
       const r=await fetch(backend+'/api/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
