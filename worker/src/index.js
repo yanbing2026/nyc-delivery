@@ -1,6 +1,7 @@
 // Cloudflare Worker：纽约送餐下单 + 店里设备取单（D1 存订单）
 // 契约：POST /api/order 下单 → GET /api/agent/pending 取单 → POST /api/agent/status 回写
 import * as D from "./delivery.js";
+import * as C from "./catalog.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 // Pages 前端跟 Worker 不同源，必须给 CORS，否则顾客点「下单」会被浏览器拦
@@ -29,6 +30,22 @@ async function getSettings(env) {
   const cfg = row ? JSON.parse(row.value) : {};
   return { ...D.DEFAULT_DELIVERY, ...cfg };
 }
+
+async function getRow(env, key) {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?1").bind(key).first();
+  return row ? JSON.parse(row.value) : null;
+}
+
+async function saveRow(env, key, value) {
+  await env.DB.prepare(
+    "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2"
+  ).bind(key, JSON.stringify(value)).run();
+  return value;
+}
+
+// 店名/电话/菜单存库里（改信息不用改代码），库里没记录时用 catalog.js 的默认值
+const getShop = async (env) => C.readShop(await getRow(env, "shop"));
+const getMenu = async (env) => C.readMenu(await getRow(env, "menu"));
 
 async function saveSettings(env, cfg) {
   await env.DB.prepare(
@@ -100,10 +117,10 @@ export default {
     try {
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
-      // 前端可读的配置（不含密钥）
+      // 前端可读的配置（不含密钥）：配送费规则 + 店名/电话 + 菜单
       if (p === "/api/config") {
         const cfg = await getSettings(env);
-        return json({ ok: true, config: {
+        return json({ ok: true, shop: await getShop(env), menu: await getMenu(env), config: {
           restaurant_addr: cfg.restaurant_addr, restaurant: cfg.restaurant, max_miles: cfg.max_miles,
           min_order: cfg.min_order, tax_rate: cfg.tax_rate, tiers: cfg.tiers, free_miles: cfg.free_miles,
           per_mile_beyond: cfg.per_mile_beyond, prep_minutes: cfg.prep_minutes, tip_options: cfg.tip_options,
@@ -191,6 +208,10 @@ export default {
         return json({ ok: true, from, to, summary: r });
       }
 
+      // 后台页面的门锁：只验口令对不对，不动任何数据
+      // （不能用 /api/agent/pending 来验 —— 它会把订单标成"已取"）
+      if (p === "/api/report/verify") return json({ ok: true, at: nowISO(), who: "店员" });
+
       if (p === "/api/report/settings" && request.method === "POST") {
         const b = await request.json().catch(() => ({}));
         const cfg = await getSettings(env);
@@ -209,7 +230,18 @@ export default {
           else return json({ ok: false, error: "店址解析失败：" + g.error }, 400);
         }
         await saveSettings(env, next);
-        return json({ ok: true, config: next });
+        // 店名/电话/菜单也能从这里改（菜单编辑页用同一把口令）
+        let shop = await getShop(env), menu = await getMenu(env);
+        if (b.shop && typeof b.shop === "object") {
+          shop = await saveRow(env, "shop", C.readShop({ ...shop, ...b.shop }));
+        }
+        if (b.menu != null) {
+          const m = C.buildMenu(b.menu);
+          // 坏菜单要报错，不能把店里的菜单悄悄换成一半
+          if (!m.ok) return json({ ok: false, error: m.error }, 400);
+          menu = await saveRow(env, "menu", m.menu);
+        }
+        return json({ ok: true, config: next, shop, menu });
       }
 
       return json({ ok: false, error: "没有这个接口：" + p }, 404);

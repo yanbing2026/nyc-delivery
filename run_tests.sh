@@ -21,6 +21,7 @@ run "后端里程与配送费（真调 NYC 接口）" backend python3 test_deliv
 run "后端点单页（DOM 桩 + 真后端）" backend node test-order-page.js
 run "前端逻辑（菜单规则 + 小票，与 Python 逐字符比对）" docs node test-wxmenu.js
 run "Pages 版点单页（后端桩，浏览器只显示后端金额）" docs node test-order-page-static.js
+run "店员后台（口令门 + 改店信息发什么）" docs node test-admin-static.js
 # Worker 版地址解析用的是 Google，测试要实测这条路径；没配 key 就自动跳过那几项
 if [ -z "${GOOGLE_MAPS_API_KEY:-}" ]; then
   GOOGLE_MAPS_API_KEY="$(grep -m1 '^GOOGLE_MAPS_API_KEY=' "${HERMES_HOME:-$HOME/.hermes}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\n')"

@@ -16,7 +16,9 @@
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
-| `docs/` | 顾客看的点单网页（纯静态）。**只负责收集地址、显示金额**：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key | 打开 `docs/index.html`，或推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs` |
+| `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key。店名/电话/菜单/运费全从后端读 | 推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs`，站点根就是它 |
+| `docs/admin.html` | **店员后台**：改店名/电话/菜单/价格/配送费规则，存到后端。进门先验口令（服务端校验），顾客那边没有入口 | 直接开 `.../admin.html`，口令就是 Worker 的 `AGENT_KEY` |
+| `docs/order.html` | 老链接的跳转页（转到 `./`），之前发出去的 `/order.html` 不会失效 | — |
 | `worker/` | **线上后端**：下单/取单/回写/日报汇总。Cloudflare Worker + D1，免费档 10 万请求/天 | 见 `worker/README.md`（4 条 wrangler 命令） |
 | `backend/` | 本地参考后端（Python 标准库零依赖）：同一套业务逻辑，方便没网/没账号时跑通全流程，也能当自托管方案 | `cd backend && sh run.sh 8899` → http://127.0.0.1:8899/order |
 
@@ -25,7 +27,7 @@
 ## 跑测试（全部无需密钥，但需要联网调纽约官方地址/路线接口）
 
 ```bash
-./run_tests.sh          # 一次跑完 6 个套件，共 232 项检查
+./run_tests.sh          # 一次跑完 7 个套件，共 289 项检查
 ```
 
 明细（也可以单独跑）：
@@ -35,17 +37,28 @@ cd backend && python3 selftest.py            # 48 项：签名/菜单规则/小�
 cd backend && python3 test_delivery.py       # 41 项：地址解析（Google 优先）+ OSRM 里程/配送费/税/小费/自取/五区范围
 cd backend && node test-order-page.js        # 38 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
 cd docs    && node test-wxmenu.js            # 23 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
-cd docs    && node test-order-page-static.js # 32 项：Pages 版点单页 —— 后端用桩，不依赖线上地址服务，结果确定
-cd worker  && node test_worker.mjs           # 50 项：Worker 全链路（真实 SQL + 真实地址/路线）
+cd docs    && node test-order-page-static.js # 37 项：点单页（站点首页）—— 后端用桩，不依赖线上地址服务，结果确定
+cd docs    && node test-admin-static.js      # 39 项：店员后台 —— 口令门怎么挡人、改完到底发了什么
+cd worker  && node test_worker.mjs           # 63 项：Worker 全链路（真实 SQL + 真实地址/路线 + 店信息读写）
 ```
 
 `worker/test_worker.mjs` 说明：这台开发机是 PRoot/Termux 类环境，`wrangler dev` 起不来（workerd 需要 1GB 对齐内存，PRoot 给不了）。所以测试用 Node 内建 `node:sqlite` 冒充 D1，直接调用 Worker 的 `fetch` 处理器 —— 测的是**同一份 Worker 代码**，不是复刻。
+
+## 改店名 / 电话 / 菜单 / 配送费规则
+
+不用改代码、不用重新发布：打开 `docs/admin.html`（线上是 `.../admin.html`），填后端地址 + 口令 → 读取 → 改 → 保存，顾客刷新点单页就是新的。
+
+- **口令 = Worker 的 `AGENT_KEY`**（`wrangler secret` 里那把，也记在本地 `.env`）。后台的门锁是**服务端校验**（`GET /api/report/verify`）：口令不对进不去，页面里没有可猜的密码
+- 口令只存在店员那台浏览器的 localStorage；拿不到口令的人只能看不能改（保存接口服务端一律再验一次）
+- 店名/电话/菜单存在 D1 的 `settings` 表（`shop` / `menu`），改完**立刻生效**；下单时金额仍由服务端按菜价重算
+- 菜品的 `id` 是历史订单的存档键，改名字改价格都不影响旧订单，但**别改 id**
 
 ## 关键业务规则（改店的时候先看这里）
 
 配送费默认为：**5 英里内免费 · 超出每英里 $2（不足 1 英里按 1 英里算，即 5~6 英里 $2、6~7 英里 $4，类推）· 不设距离上限 · 起送 $20 · 纽约市销售税 8.875%**。
 
-**只送纽约五大区**（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）：解析结果不在五区内直接拒单，别让顾客下完单才发现送不了。
+- **只送纽约五大区**（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）：解析结果不在五区内直接拒单，别让顾客下完单才发现送不了。
+- 后台接口：`GET /api/config`（公开：店名/电话/菜单/运费规则）、`GET /api/report/verify`（验口令）、`POST /api/report/settings`（改规则/店名/菜单，需口令）。`/api/report/verify` 是专门给后台门锁用的**无副作用**接口 —— 不能用 `/api/agent/pending` 验口令，它会把订单标成"已取"。
 
 - 顾客**目前只收现金**（送到付）。不收卡 → 不碰支付网关/PCI，HTTPS 证书用 Let's Encrypt/Cloudflare 免费。
 - **金额一律服务端重算**，前端传来的 subtotal/total 直接忽略（测试里专门放了一单假金额验证）。

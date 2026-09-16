@@ -199,6 +199,48 @@ check("改店址会自动重新解析坐标", addr.ok && addr.config.restaurant.
 const badAddr = (await agent("/api/report/settings", { method: "POST", body: { restaurant_addr: "乱写的地址" } })).data;
 check("店址解析失败会拒绝保存", badAddr.ok === false, badAddr.error);
 
+console.log("== 7a. 验口令（后台门锁） ==");
+check("带对口令 → 通过", (await agent("/api/report/verify")).data.ok === true);
+// HTTP 头的值只能是 ASCII（ByteString）—— 中文放进 header 会让 fetch 直接抛错，别用它测错口令
+const wrongKey = (await call("/api/report/verify", { headers: { "x-agent-key": "wrong-key-000" } })).data;
+check("口令不对 → 明确拒绝", wrongKey.ok === false && /key|口令/i.test(wrongKey.error || ""), wrongKey.error);
+check("没带口令 → 也拒绝", (await call("/api/report/verify")).data.ok === false);
+check("验口令不动数据（返回体里没有订单/配置）",
+  JSON.stringify(Object.keys((await agent("/api/report/verify")).data).sort()) === JSON.stringify(["at", "ok", "who"]),
+  Object.keys((await agent("/api/report/verify")).data));
+
+console.log("== 7b. 店名 / 电话 / 菜单（改店信息不用改代码重新发布） ==");
+const cfg0 = (await call("/api/config")).data;
+check("配置接口带回店名/电话", !!(cfg0.shop && cfg0.shop.name && cfg0.shop.phone), cfg0.shop);
+check("配置接口带回菜单（分类 → 菜 → 价格）",
+  Array.isArray(cfg0.menu) && cfg0.menu.length >= 1 && cfg0.menu[0].items.length >= 1
+  && Number.isFinite(cfg0.menu[0].items[0].price), cfg0.menu && cfg0.menu[0]);
+const SHOP0 = JSON.stringify(cfg0.shop), MENU0 = JSON.stringify(cfg0.menu);
+
+const s1 = (await agent("/api/report/settings", { method: "POST", body: { shop: { name: "测试小馆 A", phone: "212-000-1111" } } })).data;
+check("改店名/电话立刻生效", s1.ok && s1.shop.name === "测试小馆 A" && s1.shop.phone === "212-000-1111", s1.shop);
+check("重新读配置拿到新店名", (await call("/api/config")).data.shop.name === "测试小馆 A");
+
+const badMenu = (await agent("/api/report/settings", { method: "POST", body: { menu: [{ name: "坏", items: [{ id: "x", name: "", price: "abc" }] }] } })).data;
+check("坏菜单被拒并说明原因", badMenu.ok === false && /合格/.test(badMenu.error || ""), badMenu.error);
+check("坏菜单不会把已存的菜单改坏（不部分写入）",
+  JSON.stringify((await call("/api/config")).data.menu) === MENU0);
+
+const s2 = (await agent("/api/report/settings", {
+  method: "POST",
+  body: { menu: [{ name: "试菜", items: [{ id: "t1", name: "测试菜", price: 9.5 }, { id: "t1", name: "重复 id 要丢掉", price: 3 }, { id: "t2", name: "没价格的要丢掉" }] }] },
+})).data;
+check("改菜单立刻生效，重复 id / 没价格的条目被丢掉",
+  s2.ok && s2.menu.length === 1 && s2.menu[0].items.length === 1 && s2.menu[0].items[0].id === "t1", s2.menu);
+
+const noKey = (await call("/api/report/settings", { method: "POST", body: { shop: { name: "谁都能改" } } })).data;
+check("没口令改不了店名/菜单", noKey.ok === false, noKey.error);
+
+// 还原成测试前的样子，别把库里的店信息留在测试数据上
+await agent("/api/report/settings", { method: "POST", body: { shop: JSON.parse(SHOP0), menu: JSON.parse(MENU0) } });
+const cfgBack = (await call("/api/config")).data;
+check("测试数据已还原", JSON.stringify(cfgBack.shop) === SHOP0 && JSON.stringify(cfgBack.menu) === MENU0, cfgBack.shop);
+
 console.log("== 8. 限流（同一 IP 一小时 20 单） ==");
 for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));
 const rl = await call("/api/order", { method: "POST", body: { items: MENU, pickup: true } });

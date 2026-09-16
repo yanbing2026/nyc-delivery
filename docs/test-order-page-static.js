@@ -11,11 +11,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function mkEl(tag) {
   const el = { tagName: tag, children: [], style: {}, _sel: {}, _cls: new Set(),
-    innerHTML: '', textContent: '', value: '', disabled: false, onclick: null,
+    textContent: '', value: '', disabled: false, onclick: null,
     classList: { add: (c) => el._cls.add(c), remove: (c) => el._cls.delete(c),
       toggle: (c, on) => (on === undefined ? (el._cls.has(c) ? el._cls.delete(c) : el._cls.add(c)) : on ? el._cls.add(c) : el._cls.delete(c)),
       contains: (c) => el._cls.has(c) },
     appendChild(c) { this.children.push(c); return c; },
+    // 真 DOM 里 innerHTML='' 会清空子节点（页面靠它重画菜单/报价），桩也得照做，
+    // 否则多次渲染的节点会叠在一起，测试点到的是上一轮的旧节点
+    set innerHTML(v) { if (String(v) === '') { this.children.length = 0; this._sel = {}; } this._html = String(v); },
+    get innerHTML() { return this._html || ''; },
     querySelector(s) { return this._sel[s] || (this._sel[s] = mkEl('stub:' + s)); },
     addEventListener() {}, setAttribute() {}, getAttribute() { return null; }, click() { if (this.onclick) this.onclick(); } };
   return el;
@@ -39,13 +43,20 @@ const CFG = { enabled: true, free_miles: 5, tiers: [], per_mile_beyond: 2.0, max
   payment: ['现金 Cash（送到付）'], restaurant_addr: '10-53 116th St, Flushing, NY 11356',
   restaurant: { lat: 40.7873972, lon: -73.8511667 }, fallback_fee: 5.0 };
 const MILES = 5.56;                        // 固定里程，模拟后端 Google+OSRM 的结果
+const SHOP_STUB = { name: '桩小店', phone: '718-000-0000', slogan: '桩口号' };
+const MENU_STUB = [
+  { name: '桩分类一', items: [{ id: 's1', name: '桩菜甲', en: 'Stub A', desc: '', price: 10 },
+    { id: 's2', name: '桩菜乙', en: 'Stub B', desc: '', price: 5.5 }] },
+  { name: '桩分类二', items: [{ id: 's3', name: '桩菜丙', en: 'Stub C', desc: '', price: 20 }] },
+];
 const calls = [];
 const money2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 globalThis.fetch = async (u) => {
   const url = String(u);
   calls.push(url);
   const reply = (obj) => ({ ok: true, status: 200, json: async () => obj });
-  if (url.startsWith(BACKEND + '/api/config')) return reply({ ok: true, at: 'stub', config: CFG });
+  if (url.startsWith(BACKEND + '/api/config'))
+    return reply({ ok: true, at: 'stub', config: CFG, shop: SHOP_STUB, menu: MENU_STUB });
   if (url.startsWith(BACKEND + '/api/autocomplete'))
     return reply({ ok: true, items: [{ label: '59-04 99th St, Flushing, NY 11368, USA', name: '', borough: 'Queens',
       postalcode: '11368', lat: 40.7499, lon: -73.8636, source: 'google' }] });
@@ -91,11 +102,15 @@ globalThis.fetch = async (u) => {
 (async () => {
   const dir = __dirname;
   eval(fs.readFileSync(path.join(dir, 'wxmenu.js'), 'utf8'));
-  const html = fs.readFileSync(path.join(dir, 'order.html'), 'utf8');
+  const html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');   // 点单页现在就是站点首页
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   const code = scripts[scripts.length - 1].replace(/\bboot\(\);\s*$/, '');
-  eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,cart,MENU,setMode,setTip,setAddr:(v)=>{$('addr').value=v;onAddr()},submit(){ $('submit').onclick(); },
-    get Q(){return Q}, get cfg(){return cfg}, get pickup(){return pickup} };`);
+  // cart/MENU/SHOP 要用 getter：写成简写属性只是创建那一刻的快照，
+  // 拿它改购物车等于改一份副本（曾经因此把"幽灵菜"那条用例变成永远通过）
+  eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,setMode,setTip,setAddr:(v)=>{$('addr').value=v;onAddr()},submit(){ $('submit').onclick(); },
+    get cart(){return cart}, get MENU(){return MENU}, get SHOP(){return SHOP},
+    get Q(){return Q}, get cfg(){return cfg}, get pickup(){return pickup},
+    get count(){return count()}, get sub(){return subtotal()} };`);
   const T = globalThis.__T;
 
   console.log('== 1. 启动：读后端配置（页面自己不算钱） ==');
@@ -115,7 +130,15 @@ globalThis.fetch = async (u) => {
   localStorage.setItem('wxmenu_debug', '0');
   await T.reloadConfig();
   check('关掉调试开关后店员面板再次隐藏', els['devBox'].style.display === 'none', els['devBox'].style.display);
-  check('菜单渲染', (els['menu'].children || []).length >= 8, (els['menu'].children || []).length);
+  check('菜单来自后端（页面上那份只是兜底）',
+    (els['menu'].children || []).some((c) => (c.innerHTML || '').includes('桩菜甲')),
+    (els['menu'].children || []).map((c) => (c.textContent || '').slice(0, 8)));
+  check('菜单分类数 = 后端给的分类数（2 类 3 菜 → 5 个节点）',
+    (els['menu'].children || []).length === 5, (els['menu'].children || []).length);
+  check('店名来自后端', els['shopName'].textContent === '桩小店', els['shopName'].textContent);
+  check('页头显示后端的电话/口号，不出现页面里写死的 917-555-0123',
+    els['shopLine'].textContent.includes('718-000-0000') && !els['shopLine'].textContent.includes('917-555-0123'),
+    els['shopLine'].textContent);
   // 只看"有没有本地解析地址的请求"，不看次数（下面还会故意多读几次配置）
   check('启动阶段只问了 /api/config（没有任何"本地解析地址"的请求）',
     calls.length >= 1 && calls.every((c) => c.includes('/api/config')), calls);
@@ -196,6 +219,14 @@ globalThis.fetch = async (u) => {
   check('后端拒单时合计栏也不显示 $0.00',
     els['tot'].textContent !== '$0.00' && els['tot'].textContent.includes('运费'), els['tot'].textContent);
   check('后端拒单时报价区合计行不是金额', !/合计（现金）<\/span><span>\$/.test(els['quote'].innerHTML), els['quote'].innerHTML.slice(-90));
+
+  console.log('== 7. 换菜单后购物车里的"幽灵菜"要被清掉 ==');
+  els['menu'].children[1].querySelector('.plus').onclick();   // 真实存在的一道菜
+  const realId = T.MENU[0].items[0].id;
+  T.cart['已经不卖的菜'] = 3;
+  await T.reloadConfig();
+  check('菜单里没有的菜从购物车清掉', !('已经不卖的菜' in T.cart), Object.keys(T.cart));
+  check('菜单里有的菜留在购物车', (T.cart[realId] || 0) >= 1, T.cart);
 
   console.log();
   if (fails) { console.log('❌ ' + fails + ' 项失败'); process.exit(1); }
