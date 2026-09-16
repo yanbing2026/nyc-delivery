@@ -6,10 +6,11 @@ compatibility_date = "2026-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "nyc-orders"
-database_id = "本地开发用占位；线上先在 Cloudflare 建库再填真实 id"
-# 建库：wrangler d1 create nyc-orders  → 把返回的 database_id 贴到这里
-# 初始化：wrangler d1 execute nyc-orders --file=./schema.sql --local     (本地)
-#         wrangler d1 execute nyc-orders --file=./schema.sql --remote    (线上)
+database_id = "eb9efcec-aa07-47e7-b9db-267fd82c823d"
+# 线上库已建（2026-09-16，账户 259f65f4abbe1ea7c7de106d9614a82b，区域 ENAM）
+# schema 已应用：orders / settings / hits + 3 索引 + 默认 delivery 配置
+# 重新初始化：wrangler d1 execute nyc-orders --file=./schema.sql --remote
+# 注意 schema.sql 开头是 DROP TABLE IF EXISTS —— 有真实订单后别再无脑重跑
 
 [vars]
 AGENT_KEY = "dev-key-change-me"
