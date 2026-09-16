@@ -1,8 +1,10 @@
 // 纽约送餐里程/配送费（Worker 侧，ES 模块版）
 // 与 docs/delivery.js 同一套公式，由 test_delivery_parity.js 保证两边一致
 const GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search";
+const NOMINATIM = "https://nominatim.openstreetmap.org/search";
 const OSRM = "https://router.project-osrm.org/route/v1/driving";
 const M_PER_MILE = 1609.344;
+const UA = "nyc-delivery-worker/1.0";
 
 export const DEFAULT_DELIVERY = {
   enabled: true, free_miles: 0.5,
@@ -31,20 +33,50 @@ export function looksLikeAddress(q) {
 
 export async function geocodeCandidates(query, limit = 5) {
   if (!query || !query.trim()) return [];
-  const u = new URL(GEOSEARCH);
-  u.searchParams.set("text", query);
-  u.searchParams.set("size", String(Math.min(Math.max(limit, 1), 10)));
-  const r = await fetch(u, { headers: { "User-Agent": "nyc-delivery-worker/1.0" } });
-  if (!r.ok) throw new Error("地址服务返回 " + r.status);
-  const d = await r.json();
-  return (d.features || []).map((f) => ({
-    label: f.properties.label || f.properties.name || "",
-    name: f.properties.name || "",
-    borough: f.properties.borough || "",
-    postalcode: f.properties.postalcode || "",
-    lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0],
-    source: "nyc-geosearch",
-  }));
+  const size = Math.min(Math.max(limit, 1), 10);
+  // 首选 NYC 官方 GeoSearch；报错或没结果都落到 Nominatim —— 跟 delivery.py 同一套规则。
+  // 官方接口会整站 503（2026-09-16 实测连续 4 次），没有这条兜底时报价/下单直接 500。
+  try {
+    const u = new URL(GEOSEARCH);
+    u.searchParams.set("text", query);
+    u.searchParams.set("size", String(size));
+    const r = await fetch(u, { headers: { "User-Agent": UA } });
+    if (r.ok) {
+      const d = await r.json();
+      const cands = (d.features || []).map((f) => ({
+        label: f.properties.label || f.properties.name || "",
+        name: f.properties.name || "",
+        borough: f.properties.borough || "",
+        postalcode: f.properties.postalcode || "",
+        lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0],
+        source: "nyc-geosearch",
+      }));
+      if (cands.length) return cands;
+    }
+  } catch (e) { /* 落到下面的兜底 */ }
+  const v = new URL(NOMINATIM);
+  v.searchParams.set("q", query);
+  v.searchParams.set("format", "json");
+  v.searchParams.set("limit", String(size));
+  v.searchParams.set("countrycodes", "us");
+  v.searchParams.set("addressdetails", "1");
+  const r2 = await fetch(v, { headers: { "User-Agent": UA } });
+  if (!r2.ok) throw new Error("地址服务返回 " + r2.status);
+  const d2 = await r2.json();
+  return (d2 || [])
+    .map((d) => {
+      const a = d.address || {};
+      return {
+        label: d.display_name || "",
+        name: d.name || "",
+        borough: a.suburb || a.city || "",
+        postalcode: a.postcode || "",
+        lat: parseFloat(d.lat), lon: parseFloat(d.lon),
+        source: "nominatim",
+      };
+    })
+    .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lon))
+    .slice(0, size);
 }
 
 export async function geocode(query) {

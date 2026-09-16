@@ -1,13 +1,18 @@
 /* 纽约送餐里程/配送费：纯前端版（跟后端 delivery.py 同一套规则）
    数据源都不需要 API key，且都带 CORS，浏览器可以直连：
      · 地址→坐标：NYC Planning Labs GeoSearch（官方，认 NY 地址）
+     · 地址兜底：Nominatim（官方接口 503 时用；实测返回 access-control-allow-origin: *）
      · 坐标→驾车距离：OSRM
    两个坑已在代码里处理：不写 ZIP 会跨区解析错；中文地址搜不到。 */
 (function (root) {
   'use strict';
   const GEOSEARCH = 'https://geosearch.planninglabs.nyc/v2/search';
+  const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
   const OSRM = 'https://router.project-osrm.org/route/v1/driving';
   const M_PER_MILE = 1609.344;
+  // 告诉 Nominatim 我们是谁（其使用政策要求）。浏览器会忽略这个头、用自带 UA，
+  // 但在 Node 里跑测试时它必须存在 —— 空 UA 会被 Nominatim 直接 403。
+  const UA = 'nyc-delivery/1.0 (contact: shop owner)';
 
   const DEFAULT_DELIVERY = {
     enabled: true, free_miles: 0.5,
@@ -39,20 +44,50 @@
   async function geocodeCandidates(query, limit) {
     limit = limit || 5;
     if (!query || !query.trim()) return [];
-    const u = new URL(GEOSEARCH);
-    u.searchParams.set('text', query);
-    u.searchParams.set('size', String(Math.min(Math.max(limit, 1), 10)));
-    const r = await fetch(u);
-    if (!r.ok) throw new Error('地址服务返回 ' + r.status);
-    const d = await r.json();
-    return ((d.features) || []).map((f) => ({
-      label: f.properties.label || f.properties.name || '',
-      name: f.properties.name || '',
-      borough: f.properties.borough || '',
-      postalcode: f.properties.postalcode || '',
-      lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0],
-      source: 'nyc-geosearch',
-    }));
+    const size = Math.min(Math.max(limit, 1), 10);
+    // 首选 NYC 官方 GeoSearch；报错或没结果都落到 Nominatim —— 跟 Worker 侧同一套规则
+    try {
+      const u = new URL(GEOSEARCH);
+      u.searchParams.set('text', query);
+      u.searchParams.set('size', String(size));
+      const r = await fetch(u, { headers: { 'User-Agent': UA } });
+      if (r.ok) {
+        const d = await r.json();
+        const cands = ((d.features) || []).map((f) => ({
+          label: f.properties.label || f.properties.name || '',
+          name: f.properties.name || '',
+          borough: f.properties.borough || '',
+          postalcode: f.properties.postalcode || '',
+          lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0],
+          source: 'nyc-geosearch',
+        }));
+        if (cands.length) return cands;
+      }
+    } catch (e) { /* 落到下面的兜底 */ }
+    // 兜底：Nominatim（带 CORS 可浏览器直连）。User-Agent 不设 —— 浏览器会忽略它
+    const v = new URL(NOMINATIM);
+    v.searchParams.set('q', query);
+    v.searchParams.set('format', 'json');
+    v.searchParams.set('limit', String(size));
+    v.searchParams.set('countrycodes', 'us');
+    v.searchParams.set('addressdetails', '1');
+    const r2 = await fetch(v, { headers: { 'User-Agent': UA } });
+    if (!r2.ok) throw new Error('地址服务返回 ' + r2.status);
+    const d2 = await r2.json();
+    return (d2 || [])
+      .map((d) => {
+        const a = d.address || {};
+        return {
+          label: d.display_name || '',
+          name: d.name || '',
+          borough: a.suburb || a.city || '',
+          postalcode: a.postcode || '',
+          lat: parseFloat(d.lat), lon: parseFloat(d.lon),
+          source: 'nominatim',
+        };
+      })
+      .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lon))
+      .slice(0, size);
   }
 
   async function geocode(query) {

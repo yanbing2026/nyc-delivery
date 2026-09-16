@@ -65,6 +65,27 @@ check("自取免配送费 30.38", q3.ok && q3.delivery_fee === 0 && q3.total ===
 const ac = (await call("/api/autocomplete?q=" + encodeURIComponent("100 Mott St"))).data;
 check("自动补全返回候选", ac.ok && ac.items.length > 0 && ac.items[0].postalcode, ac.items && ac.items[0]);
 
+console.log("== 2b. NYC 官方地址服务 503 时必须走 Nominatim 兜底 ==");
+{
+  // 把官方地址服务打成 503，其余请求（OSRM 等）照旧走真网络。
+  // 2026-09-16 官方接口真的整站 503 过，没有兜底时报价直接 500 —— 这条就是防它再来。
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (u, o) => String(u).includes("geosearch.planninglabs.nyc")
+    ? Promise.resolve(new Response("503", { status: 503 }))
+    : realFetch(u, o);
+  try {
+    const q = (await call("/api/quote?address=" + encodeURIComponent("1 Pike St, New York, NY 10002") + "&subtotal=27.9&tip_rate=0.18")).data;
+    check("官方 503 时 Worker 仍能报价", q.ok === true, q.error);
+    check("兜底报价的配送费跟里程对得上",
+      q.ok && q.delivery_fee === W.deliveryFee(q.distance_miles, W.DEFAULT_DELIVERY).fee, [q.distance_miles, q.delivery_fee]);
+    const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "1 Pike St, New York, NY 10002", 27.9, S.DEFAULT_DELIVERY, 0.18);
+    check("前端版同样能兜底，且两边算出来一样",
+      sq.ok === true && sq.delivery_fee === q.delivery_fee && sq.total === q.total, [sq.delivery_fee, q.delivery_fee, sq.total, q.total]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log("== 3. 前端版 vs Worker 版公式对拍（防两边算不一样） ==");
 const feeCases = [0.3, 0.5, 0.51, 2, 2.1, 4, 4.1, 6, 7, 8];
 check("配送费阶梯两边完全一致",
