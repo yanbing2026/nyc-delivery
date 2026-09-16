@@ -2,6 +2,8 @@
 // 与 docs/delivery.js 同一套公式，由 test_delivery_parity.js 保证两边一致
 const GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search";
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
+const GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json";
+const GOOGLE_TIMEOUT_MS = 4000;   // 地址解析是下单必经之路，卡住就等于不接单
 const OSRM = "https://router.project-osrm.org/route/v1/driving";
 const M_PER_MILE = 1609.344;
 const UA = "nyc-delivery-worker/1.0";
@@ -31,10 +33,38 @@ export function looksLikeAddress(q) {
   return [true, ""];
 }
 
-export async function geocodeCandidates(query, limit = 5) {
+export async function geocodeCandidates(query, limit = 5, gkey = "") {
   if (!query || !query.trim()) return [];
   const size = Math.min(Math.max(limit, 1), 10);
-  // 首选 NYC 官方 GeoSearch；报错或没结果都落到 Nominatim —— 跟 delivery.py 同一套规则。
+  // 第一档 Google：有 SLA 和免费额度，而且能解 Queens 那种 10-53 连字符门牌号 ——
+  // 两个免费源都解不了它（2026-09-16 实测店址改成 10-53 116th St 时官方接口 503、
+  // Nominatim 直接找不到）。没配 key 就跳过这一档，退回免费源。
+  if (gkey) {
+    try {
+      const g = new URL(GOOGLE_GEOCODE);
+      g.searchParams.set("address", query);
+      g.searchParams.set("key", gkey);
+      g.searchParams.set("language", "en");
+      g.searchParams.set("region", "us");
+      const r = await fetch(g, { signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS) });
+      if (r.ok) {
+        const d = await r.json();
+        if (d.status === "OK" || d.status === "ZERO_RESULTS") {
+          const part = (x, type) => (x.address_components || []).find((c) => (c.types || []).includes(type));
+          const cands = (d.results || []).map((x) => {
+            const borough = part(x, "sublocality_level_1") || part(x, "sublocality") || part(x, "locality");
+            const pc = part(x, "postal_code");
+            const loc = (x.geometry || {}).location || {};
+            return { label: x.formatted_address || "", name: "",
+              borough: borough ? borough.long_name : "", postalcode: pc ? pc.short_name : "",
+              lat: loc.lat, lon: loc.lng, source: "google" };
+          }).filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lon));
+          if (cands.length) return cands.slice(0, size);
+        }
+      }
+    } catch (e) { /* 超时/网络问题 → 落到免费源 */ }
+  }
+  // 第二档 NYC 官方 GeoSearch；报错或没结果都落到 Nominatim —— 跟 delivery.py 同一套规则。
   // 官方接口会整站 503（2026-09-16 实测连续 4 次），没有这条兜底时报价/下单直接 500。
   try {
     const u = new URL(GEOSEARCH);
@@ -79,9 +109,9 @@ export async function geocodeCandidates(query, limit = 5) {
     .slice(0, size);
 }
 
-export async function geocode(query) {
+export async function geocode(query, gkey = "") {
   const zips = String(query || "").split(/[,\s]+/).filter((t) => /^\d{5}$/.test(t));
-  const cands = await geocodeCandidates(query, 10);
+  const cands = await geocodeCandidates(query, 10, gkey);
   if (!cands.length) return { ok: false, error: "地址没找到，检查门牌号/街名/邮编，或补上区名（Flushing / Chinatown）" };
   if (zips.length) {
     const hit = cands.find((c) => c.postalcode === zips[0]);
@@ -121,7 +151,7 @@ export function deliveryFee(miles, cfg = {}) {
     tier: `${last.max} 英里 $${last.fee.toFixed(2)} + 超出 ${(m - last.max).toFixed(1)} 英里 × $${cfg.per_mile_beyond}/英里` };
 }
 
-export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate = 0, pickup = false) {
+export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate = 0, pickup = false, gkey = "") {
   cfg = { ...DEFAULT_DELIVERY, ...cfg };
   const out = { subtotal: money(subtotal), pickup: !!pickup, tax_rate: cfg.tax_rate, min_order: cfg.min_order };
   if (pickup) {
@@ -129,7 +159,7 @@ export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate =
   } else {
     const [ok, warn] = looksLikeAddress(addrQuery);
     if (!ok) return { ok: false, error: warn, ...out };
-    const g = await geocode(addrQuery);
+    const g = await geocode(addrQuery, gkey);
     if (!g.ok) return { ...g, ...out };
     out.address = { input: addrQuery, matched: g.label, borough: g.borough, zip: g.postalcode,
       lat: g.lat, lon: g.lon, source: g.source };

@@ -68,7 +68,7 @@ async function createOrder(env, body, ip) {
 
   // 金额一律服务端重算，不信前端传的
   const q = await D.quote(cfg.restaurant, pickup ? "" : (body.address || "").trim(), subtotal, cfg,
-    Number(body.tip_rate || 0), pickup);
+    Number(body.tip_rate || 0), pickup, env.GOOGLE_MAPS_API_KEY);
   if (!q.ok) return json({ ok: false, error: q.error, quote: q }, 400);
   if (await rateLimited(env, ip)) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
 
@@ -115,13 +115,13 @@ export default {
         const cfg = await getSettings(env);
         const q = await D.quote(cfg.restaurant, url.searchParams.get("address") || "",
           Number(url.searchParams.get("subtotal") || 0), cfg,
-          Number(url.searchParams.get("tip_rate") || 0), url.searchParams.get("pickup") === "1");
+          Number(url.searchParams.get("tip_rate") || 0), url.searchParams.get("pickup") === "1", env.GOOGLE_MAPS_API_KEY);
         q.address_check = D.looksLikeAddress(url.searchParams.get("address") || "");
         return json(q);
       }
 
       if (p === "/api/autocomplete")
-        return json({ ok: true, items: await D.geocodeCandidates(url.searchParams.get("q") || "", 6) });
+        return json({ ok: true, items: await D.geocodeCandidates(url.searchParams.get("q") || "", 6, env.GOOGLE_MAPS_API_KEY) });
 
       if (p === "/api/order" && request.method === "POST")
         return await createOrder(env, await request.json().catch(() => ({})), ip);
@@ -202,7 +202,7 @@ export default {
         if (Array.isArray(next.tiers)) next.tiers = next.tiers.map((t) => ({ max: Number(t.max), fee: Number(t.fee) }));
         // 店址改了就把坐标重新解析一遍，不然里程全错
         if (b.restaurant_addr && b.restaurant_addr !== cfg.restaurant_addr) {
-          const g = await D.geocode(next.restaurant_addr);
+          const g = await D.geocode(next.restaurant_addr, env.GOOGLE_MAPS_API_KEY);
           if (g.ok) next.restaurant = { lat: g.lat, lon: g.lon };
           else return json({ ok: false, error: "店址解析失败：" + g.error }, 400);
         }
