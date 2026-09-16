@@ -126,7 +126,9 @@ const SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 唐
 // 运费一律由后端算；默认就指向线上 Worker，本地调试时用 localStorage('wxmenu_backend') 覆盖
 const DEFAULT_BACKEND='https://nyc-delivery-orders.yanbing2004.workers.dev';
 let cart={},pickup=false,tipRate=0,Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
-const money=v=>'$'+Number(v||0).toFixed(2);
+// 缺字段一律显示 —（以前 Number(v||0) 会把 undefined 变成 $0.00，
+// 顾客看到"合计 $0.00"会以为页坏了）
+const money=v=>Number.isFinite(+v)?'$'+(+v).toFixed(2):'—';
 const subtotal=()=>Math.round(MENU.reduce((s,g)=>s+g.items.reduce((t,it)=>t+(cart[it.id]||0)*it.price,0),0)*100)/100;
 const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
 
@@ -196,9 +198,10 @@ function pick(i){ $('addr').value=window.__c[i].label.replace(/, USA$/,''); $('c
 
 let qSeq=0;
 async function refresh(){
-  const c=count();
-  $('tot').textContent=money(subtotal())+' +';
+  const c=count(), sub=subtotal();
   if(!c){ $('quote').innerHTML=''; $('barHint').textContent='还没选菜'; $('submit').disabled=true; $('tot').textContent='$0.00'; return; }
+  // 后端金额没回来之前先显示小计并标明还没算运费 —— 绝不用一个像样的"合计"顶上去
+  $('tot').textContent=money(sub)+(pickup?'':' + 运费');
   if(!backend){ msg('err','未连接后端：运费由店里服务器计算，先在菜单编辑页填上后端地址'); $('submit').disabled=true; $('quote').innerHTML=''; return; }
   const seq=++qSeq;
   const addr=$('addr').value.trim();
@@ -210,8 +213,10 @@ async function refresh(){
   }catch(e){ q={ok:false,error:'连不上后端：'+(e.message||e)}; }
   if(seq!==qSeq) return;
   Q=q;
-  $('tot').textContent=money(q.total);
-  $('quote').innerHTML=rows(q);
+  // 只有后端真的算出合计才显示合计；地址没填/地址不认/连不上后端时显示小计，
+  // 否则合计栏会变成一个假的 $0.00（顾客以为加菜没生效）
+  $('tot').textContent=(q&&q.ok&&Number.isFinite(+q.total))?money(q.total):money(sub)+(pickup?'':' + 运费');
+  $('quote').innerHTML=rows(q,sub);
   const probs=[];
   if(!pickup){
     const [okA,why]=q.address_check||[true,''];
@@ -224,13 +229,15 @@ async function refresh(){
   const dist=q.distance?Number(q.distance.miles).toFixed(1)+' 英里':'';
   $('barHint').textContent=`${c} 件 · ${pickup?'到店自取':(dist||'待填地址')}`;
 }
-function rows(q){
-  const r=[`<div class="r"><span>小计</span><span>${money(q.subtotal)}</span></div>`];
+function rows(q,sub){
+  const r=[`<div class="r"><span>小计</span><span>${money(q.subtotal!=null?q.subtotal:sub)}</span></div>`];
   if(q.tax) r.push(`<div class="r"><span>税 ${(q.tax_rate*100).toFixed(3)}%</span><span>${money(q.tax)}</span></div>`);
   if(!pickup&&q.delivery) r.push(`<div class="r"><span>配送费 ${q.delivery.tier?'（'+q.delivery.tier+'）':''}</span><span>${q.delivery.fee==null?'—':money(q.delivery.fee)}</span></div>`);
   if(q.tip) r.push(`<div class="r"><span>小费 ${Math.round(tipRate*100)}%</span><span>${money(q.tip)}</span></div>`);
   if(q.distance&&!pickup) r.push(`<div class="r"><span>距离 / 预计送达</span><span>${Number(q.distance.miles).toFixed(2)} 英里 · ${q.eta_minutes||'—'} 分钟</span></div>`);
-  r.push(`<div class="r tot"><span>合计（现金）</span><span>${money(q.total)}</span></div>`);
+  r.push((q&&q.ok&&Number.isFinite(+q.total))
+    ? `<div class="r tot"><span>合计（现金）</span><span>${money(q.total)}</span></div>`
+    : `<div class="r tot"><span>合计（现金）</span><span>${pickup?'待后端计算':'填地址后计算'}</span></div>`);
   return r.join('');
 }
 

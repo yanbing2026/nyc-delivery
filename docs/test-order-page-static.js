@@ -56,8 +56,10 @@ globalThis.fetch = async (u) => {
     const pickup = p.get('pickup') === '1';
     const addr = p.get('address') || '';
     // 与真 Worker 一致：中文地址会被判不合格，address_check 里带说明，同时 ok:false
-    const address_check = /[\u4e00-\u9fff]/.test(addr)
-      ? [false, '请用英文街名（纽约系统不认中文地址），例如 59-04 99th St, Corona, NY 11368']
+    // 自取不看地址（与真 Worker 一致：pickup 分支不校验地址）
+    const address_check = pickup ? [true, '']
+      : !addr.trim() ? [false, '地址不能为空']
+      : /[\u4e00-\u9fff]/.test(addr) ? [false, '请用英文街名（纽约系统不认中文地址），例如 59-04 99th St, Corona, NY 11368']
       : [true, ''];
     if (!address_check[0])
       return reply({ ok: false, error: address_check[1], address_check, subtotal, pickup, tax_rate: CFG.tax_rate, min_order: CFG.min_order });
@@ -154,6 +156,34 @@ globalThis.fetch = async (u) => {
   await sleep(400);
   await T.refresh();
   check('中文地址提示用英文街名', els['msgs'].innerHTML.includes('英文街名'), els['msgs'].innerHTML.slice(0, 100));
+
+  console.log('== 6. 合计栏不许出现假金额（没填地址 / 地址后端不认） ==');
+  // 回归用例：顾客加了两道菜但还没填地址，页面上"合计"曾经显示 $0.00，
+  // 看着像加菜没生效。现在必须显示小计并标明还没算运费。
+  els['menu'].children[1].querySelector('.plus').onclick();
+  els['menu'].children[1].querySelector('.plus').onclick();
+  T.setMode(false);
+  T.setAddr('');
+  await sleep(400);
+  await T.refresh();
+  // 小计要按菜单单价算（cart 存的是 id → 份数）
+  const priceOf = (id) => { for (const g of T.MENU) for (const it of g.items) if (it.id === id) return it.price; return 0; };
+  const sub = Object.entries(T.cart).reduce((a, [id, n]) => a + priceOf(id) * n, 0);
+  check('购物车确实非空（复现前提）', sub > 0, sub);
+  check('没填地址时合计栏不显示 $0.00', els['tot'].textContent !== '$0.00', els['tot'].textContent);
+  check('没填地址时合计栏显示小计并标明还要加运费',
+    els['tot'].textContent.startsWith('$') && els['tot'].textContent.includes('运费'), els['tot'].textContent);
+  check('合计栏显示的小计与购物车一致', els['tot'].textContent.includes(sub.toFixed(2)), [els['tot'].textContent, sub]);
+  check('报价区的合计行写"填地址后计算"而不是金额',
+    els['quote'].innerHTML.includes('填地址后计算'), els['quote'].innerHTML.slice(0, 160));
+  check('底栏提示待填地址', els['barHint'].textContent.includes('待填地址'), els['barHint'].textContent);
+
+  T.setAddr('法拉盛 缅街 41-28');   // 后端判不合格 → ok:false
+  await sleep(400);
+  await T.refresh();
+  check('后端拒单时合计栏也不显示 $0.00',
+    els['tot'].textContent !== '$0.00' && els['tot'].textContent.includes('运费'), els['tot'].textContent);
+  check('后端拒单时报价区合计行不是金额', !/合计（现金）<\/span><span>\$/.test(els['quote'].innerHTML), els['quote'].innerHTML.slice(-90));
 
   console.log();
   if (fails) { console.log('❌ ' + fails + ' 项失败'); process.exit(1); }
