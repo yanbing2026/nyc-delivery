@@ -59,20 +59,20 @@ const quoteMiles = (q) => (q.distance || {}).miles;
 console.log("== 1. 基础接口 ==");
 check("GET /api/health", (await call("/api/health")).data.ok);
 const cfg = (await call("/api/config")).data;
-check("GET /api/config 给出店址与规则", cfg.ok && cfg.config.restaurant_addr.includes("Bayard") && cfg.config.max_miles === 8, cfg.config && cfg.config.max_miles);
+check("GET /api/config 给出店址与规则", cfg.ok && cfg.config.restaurant_addr.includes("Flushing") && cfg.config.max_miles === 8, cfg.config && cfg.config.max_miles);
 check("支付方式只有现金", (cfg.config.payment || []).join() === "现金 Cash（送到付）", cfg.config.payment);
 
 console.log("== 2. 地址与报价（真调 GeoSearch + OSRM） ==");
-const q1 = (await call("/api/quote?address=" + encodeURIComponent("1 Pike St, New York, NY 10002") + "&subtotal=27.9&tip_rate=0.18")).data;
+const q1 = (await call("/api/quote?address=" + encodeURIComponent("59-04 99th St, Corona, NY 11368") + "&subtotal=27.9&tip_rate=0.18")).data;
 check("报价成功", q1.ok, q1.error);
-check("解析到 10002", q1.address && q1.address.zip === "10002", q1.address);
+check("解析到 11368", q1.address && q1.address.zip === "11368", q1.address);
 check("配送费跟里程档位一致（不写死坐标）", q1.delivery_fee === expectFee(quoteMiles(q1)), [quoteMiles(q1), q1.delivery_fee]);
 check("税 = 27.9 × 8.875% = 2.48", q1.tax === 2.48, q1.tax);
 check("小费 = 5.02", q1.tip === 5.02, q1.tip);
 check("合计 = 小计 + 税 + 小费 + 配送费", q1.total === round2(q1.subtotal + q1.tax + q1.tip + q1.delivery_fee),
   [q1.subtotal, q1.tax, q1.tip, q1.delivery_fee, q1.total]);
-const q2 = (await call("/api/quote?address=" + encodeURIComponent("136-20 Roosevelt Ave, Flushing, NY 11354") + "&subtotal=27.9")).data;
-check("法拉盛 11 英里 → 超出范围", q2.ok === false && /超出配送范围/.test(q2.error), q2.error);
+const q2 = (await call("/api/quote?address=" + encodeURIComponent("40 Bayard St, New York, NY 10013") + "&subtotal=27.9")).data;
+check("曼哈顿 13.9 英里 → 超出范围", q2.ok === false && /超出配送范围/.test(q2.error), q2.error);
 const q3 = (await call("/api/quote?subtotal=27.9&pickup=1")).data;
 check("自取免配送费 30.38", q3.ok && q3.delivery_fee === 0 && q3.total === 30.38, q3);
 const ac = (await call("/api/autocomplete?q=" + encodeURIComponent("100 Mott St"))).data;
@@ -87,11 +87,11 @@ console.log("== 2b. NYC 官方地址服务 503 时必须走 Nominatim 兜底 =="
     ? Promise.resolve(new Response("503", { status: 503 }))
     : realFetch(u, o);
   try {
-    const q = (await call("/api/quote?address=" + encodeURIComponent("1 Pike St, New York, NY 10002") + "&subtotal=27.9&tip_rate=0.18")).data;
+    const q = (await call("/api/quote?address=" + encodeURIComponent("59-04 99th St, Corona, NY 11368") + "&subtotal=27.9&tip_rate=0.18")).data;
     check("官方 503 时 Worker 仍能报价", q.ok === true, q.error);
     check("兜底报价的配送费跟里程对得上",
       q.ok && q.delivery_fee === expectFee(quoteMiles(q)), [quoteMiles(q), q.delivery_fee]);
-    const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "1 Pike St, New York, NY 10002", 27.9, S.DEFAULT_DELIVERY, 0.18);
+    const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "59-04 99th St, Corona, NY 11368", 27.9, S.DEFAULT_DELIVERY, 0.18);
     check("前端版同样能兜底（金额自洽）",
       sq.ok === true && sq.total === round2(sq.subtotal + sq.tax + sq.tip + sq.delivery_fee), sq);
   } finally {
@@ -106,7 +106,7 @@ console.log("== 2c. Google 和官方都打挂 → 仍然要能报价（最后一
     ? Promise.resolve(new Response("503", { status: 503 }))
     : realFetch(u, o);
   try {
-    const q = (await call("/api/quote?address=" + encodeURIComponent("1 Pike St, New York, NY 10002") + "&subtotal=27.9&tip_rate=0.18")).data;
+    const q = (await call("/api/quote?address=" + encodeURIComponent("59-04 99th St, Corona, NY 11368") + "&subtotal=27.9&tip_rate=0.18")).data;
     check("三档地址源全挂时仍能报价", q.ok === true, q.error);
     check("兜底配送费仍与里程对得上", q.ok && q.delivery_fee === expectFee(quoteMiles(q)), [quoteMiles(q), q.delivery_fee]);
   } finally {
@@ -119,7 +119,7 @@ const feeCases = [0.3, 0.5, 0.51, 2, 2.1, 4, 4.1, 6, 7, 8];
 check("配送费阶梯两边完全一致",
   feeCases.every((m) => S.deliveryFee(m, S.DEFAULT_DELIVERY).fee === W.deliveryFee(m, W.DEFAULT_DELIVERY).fee));
 check("9.5 英里两边都拒", S.deliveryFee(9.5, S.DEFAULT_DELIVERY).ok === false && W.deliveryFee(9.5, W.DEFAULT_DELIVERY).ok === false);
-const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "1 Pike St, New York, NY 10002", 27.9, S.DEFAULT_DELIVERY, 0.18);
+const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "59-04 99th St, Corona, NY 11368", 27.9, S.DEFAULT_DELIVERY, 0.18);
 // Worker 与前端以后可能用不同的地址服务（Worker 换成 Google 之后，同一个地址
 // 解析出的里程就会差一个档），所以这里只对拍与地址无关的部分 + 各自的金额自洽；
 // 配送费函数本身的一致性由上面 feeCases 那条逐档对拍保证。
@@ -130,10 +130,10 @@ check("前端版金额自洽", sq.total === round2(sq.subtotal + sq.tax + sq.tip
 console.log("== 4. 下单（金额服务端重算） ==");
 const bad = await call("/api/order", { method: "POST", body: { items: MENU } });
 check("不填地址 → 拒单", bad.status === 400 && /英文街名|地址/.test(bad.data.error), bad.data.error);
-const low = await call("/api/order", { method: "POST", body: { items: [{ name: "白米饭", qty: 1, price: 2 }], address: "1 Pike St, New York, NY 10002" } });
+const low = await call("/api/order", { method: "POST", body: { items: [{ name: "白米饭", qty: 1, price: 2 }], address: "59-04 99th St, Corona, NY 11368" } });
 check("未到起送价 → 拒单", low.status === 400 && /起送/.test(low.data.error), low.data.error);
 const created = await call("/api/order", { method: "POST", body: {
-  items: MENU, address: "1 Pike St, New York, NY 10002", customer: "张先生", phone: "917-555-0123",
+  items: MENU, address: "59-04 99th St, Corona, NY 11368", customer: "张先生", phone: "917-555-0123",
   tip_rate: 0.18, remark: "多给筷子", pay_type: "现金 Cash（送到付）" } });
 check("正常下单成功", created.data.ok, created.data.error);
 const o = created.data.order;
@@ -142,9 +142,9 @@ check("服务端重算金额：小计 27.90 / 税 2.48 / 小费 5.02 固定，�
   o.subtotal === 27.9 && o.tax === 2.48 && o.tip === 5.02 &&
   o.delivery_fee === expectFee(o.distance_miles) && o.total === round2(o.subtotal + o.tax + o.tip + o.delivery_fee), o);
 check("订单带距离和预计送达", o.distance_miles > 0 && o.distance_miles <= 8 && o.eta_minutes > 0, [o.distance_miles, o.eta_minutes]);
-check("地址是解析后的标准地址（送餐员能看）", /PIKE ST/i.test(o.address), o.address);
+check("地址是解析后的标准地址（送餐员能看）", /99TH ST/i.test(o.address), o.address);
 const fake = await call("/api/order", { method: "POST", body: {
-  items: MENU, address: "1 Pike St, New York, NY 10002", pickup: true, total: 0.01, subtotal: 0.01 } });
+  items: MENU, address: "59-04 99th St, Corona, NY 11368", pickup: true, total: 0.01, subtotal: 0.01 } });
 check("前端传的假金额被无视（自取按 30.38 收）", fake.data.order.total === 30.38, fake.data.order.total);
 
 console.log("== 5. 店里设备取单 / 回写 ==");
@@ -186,12 +186,13 @@ check("金额都四舍五入到分（客单价 41.07 不是 41.0733）",
 check("失败打印数 / 待人工核对数都在报表里", rep.summary.failed_prints !== undefined && rep.summary.manual_review !== undefined, rep.summary);
 
 console.log("== 7. 改规则（改完立刻生效） ==");
-const set = (await agent("/api/report/settings", { method: "POST", body: { max_miles: 12 } })).data;
-check("配送上限改成 12 英里", set.ok && set.config.max_miles === 12, set.error);
-const q4 = (await call("/api/quote?address=" + encodeURIComponent("136-20 Roosevelt Ave, Flushing, NY 11354") + "&subtotal=27.9")).data;
-check("法拉盛现在能送了", q4.ok && q4.delivery_fee > 10, q4.error || q4.delivery_fee);
-const addr = (await agent("/api/report/settings", { method: "POST", body: { restaurant_addr: "136-20 Roosevelt Ave, Flushing, NY 11354" } })).data;
-check("改店址会自动重新解析坐标", addr.ok && addr.config.restaurant.lat > 40.75, addr.config && addr.config.restaurant);
+const set = (await agent("/api/report/settings", { method: "POST", body: { max_miles: 14 } })).data;
+check("配送上限改成 14 英里", set.ok && set.config.max_miles === 14, set.error);
+const q4 = (await call("/api/quote?address=" + encodeURIComponent("40 Bayard St, New York, NY 10013") + "&subtotal=27.9")).data;
+check("13.7 英里那单现在能送了", q4.ok && q4.delivery_fee > 10, q4.error || q4.delivery_fee);
+// 用一个两家地址服务都能解析的地址（没有 Google key 时也要跑得过）
+const addr = (await agent("/api/report/settings", { method: "POST", body: { restaurant_addr: "40 Bayard St, New York, NY 10013" } })).data;
+check("改店址会自动重新解析坐标", addr.ok && addr.config.restaurant.lat < 40.75, addr.config && addr.config.restaurant);
 const badAddr = (await agent("/api/report/settings", { method: "POST", body: { restaurant_addr: "乱写的地址" } })).data;
 check("店址解析失败会拒绝保存", badAddr.ok === false, badAddr.error);
 

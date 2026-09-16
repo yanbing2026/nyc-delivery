@@ -3,6 +3,7 @@ const D = require('./delivery.js');
 let fails = 0;
 const check = (n, c, e) => { console.log((c ? '  ✓ ' : '  ✗ ') + n + (c || e === undefined ? '' : '  ← ' + e)); if (!c) fails++; };
 const REST = D.DEFAULT_DELIVERY.restaurant;
+const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
 (async () => {
   console.log('== 1. 地址体检（与后端 Python 同一套规则） ==');
@@ -28,20 +29,21 @@ const REST = D.DEFAULT_DELIVERY.restaurant;
   const g3 = await D.geocode('136-20 Roosevelt Ave, Flushing, NY 11354');
   check('法拉盛 11354 定位正确', g3.ok && g3.postalcode === '11354', g3);
   const r = await D.routeMiles(REST, g2);
-  check('算出驾车里程且含时间', r.ok && r.miles > 0.5 && r.miles < 1.5 && r.minutes > 0, r);
+  check('算出驾车里程且含时间', r.ok && r.miles > 5 && r.minutes > 0, r);   // 店搬到法拉盛后 → 下东城是十几英里
 
   console.log('== 4. 整单报价（与后端 Python 对齐） ==');
-  const q = await D.quote(REST, '1 Pike St, New York, NY 10002', 42, CFG, 0.18);
+  const q = await D.quote(REST, '136-20 Roosevelt Ave, Flushing, NY 11354', 42, CFG, 0.18);
   check('报价成功', q.ok, q.error);
   check('税 42×8.875% = 3.73', q.tax === 3.73, q.tax);
   check('小费 42×18% = 7.56', q.tip === 7.56, q.tip);
-  check('配送费 $3（0.8 英里落在 ≤2 英里档）', q.delivery_fee === 3, q.delivery_fee);
-  check('合计 56.29', q.total === 56.29, q.total);
+  // 配送费按档位公式判，不写死金额：换店址/换地址服务都会让里程变
+  check('配送费与实测里程档位一致', q.delivery_fee === D.deliveryFee(q.distance.miles, CFG).fee, [q.distance.miles, q.delivery_fee]);
+  check('合计 = 小计 + 税 + 小费 + 配送费', q.total === money(q.subtotal + q.tax + q.tip + q.delivery_fee), q.total);
   check('预计送达 = 车程 + 20 分钟备餐', q.eta_minutes === q.distance.minutes + 20, [q.eta_minutes, q.distance.minutes]);
   console.log(`     ${q.address.matched} → ${q.distance.miles} 英里 / ${q.distance.minutes} 分钟 / 配送费 $${q.delivery_fee} / 合计 $${q.total}`);
 
-  const q2 = await D.quote(REST, '136-20 Roosevelt Ave, Flushing, NY 11354', 42, CFG, 0.18);
-  check('法拉盛 11 英里 → 超出配送范围', q2.ok === false && /超出配送范围/.test(q2.error), q2.error);
+  const q2 = await D.quote(REST, '1 Pike St, New York, NY 10002', 42, CFG, 0.18);
+  check('下东城十几英里 → 超出配送范围（店在法拉盛了）', q2.ok === false && /超出配送范围/.test(q2.error), q2.error);
   const q3 = await D.quote(REST, '1 Pike St, New York, NY 10002', 12, CFG, 0);
   check('$12 低于起送价 $20 → 拦', q3.ok === false && /起送/.test(q3.error), q3.error);
   const q4 = await D.quote(REST, '', 42, CFG, 0, true);

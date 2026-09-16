@@ -49,8 +49,8 @@ INSERT INTO settings (key, value) VALUES ('delivery', '{
   "prep_minutes": 20,
   "tip_options": [0.15, 0.18, 0.2],
   "payment": ["现金 Cash（送到付）"],
-  "restaurant_addr": "40 Bayard St, New York, NY 10013",
-  "restaurant": {"lat": 40.715285, "lon": -73.998012},
+  "restaurant_addr": "10-53 116th St, Flushing, NY 11356",
+  "restaurant": {"lat": 40.7873972, "lon": -73.8511667},
   "fallback_fee": 5.0
 }');
 

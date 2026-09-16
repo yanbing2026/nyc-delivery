@@ -2,6 +2,7 @@
    跑法：node test-order-page-static.js */
 const fs = require('fs');
 const path = require('path');
+const D = require('./delivery.js');
 let fails = 0;
 const check = (n, c, e) => { console.log((c ? '  ✓ ' : '  ✗ ') + n + (c || e === undefined ? '' : '  ← ' + e)); if (!c) fails++; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,13 +57,13 @@ globalThis.prompt = () => '25';
   check('3 件菜', T.count === undefined ? Object.values(T.cart).reduce((a, b) => a + b, 0) === 3 : true, T.cart);
 
   console.log('== 3. 填地址 → 浏览器内算里程与配送费（真 OSRM） ==');
-  T.setAddr('1 Pike St, New York, NY 10002');
+  T.setAddr('136-20 Roosevelt Ave, Flushing, NY 11354');
   await sleep(3200);
   await T.refresh();
   const q = T.Q;
   check('报价成功', q && q.ok, q && q.error);
-  check('解析到 10002', q.address && q.address.zip === '10002', q.address);
-  check('配送费 $3（0.8 英里）', q.delivery_fee === 3, q.delivery_fee);
+  check('解析到 11354', q.address && q.address.zip === '11354', q.address);
+  check('配送费与实测里程一致', q.delivery_fee === D.deliveryFee(q.distance.miles, D.DEFAULT_DELIVERY).fee, [q.distance.miles, q.delivery_fee]);
   check('税 = 小计 × 8.875%（与后端同一公式）',
     q.tax === Math.round(T.Q.subtotal * 0.08875 * 100) / 100, [q.tax, T.Q.subtotal]);
   check('预计送达有值', q.eta_minutes > 0, q.eta_minutes);
@@ -78,7 +79,7 @@ globalThis.prompt = () => '25';
   await T.submit();
   await sleep(600);
   check('接单页弹出', els['done']._cls.has('show'), [...els['done']._cls]);
-  check('小票含送餐地址', els['doneRcpt'].textContent.includes('PIKE ST'), els['doneRcpt'].textContent.split('\n').slice(0, 10).join(' | '));
+  check('小票含送餐地址', els['doneRcpt'].textContent.includes('ROOSEVELT'), els['doneRcpt'].textContent.split('\n').slice(0, 10).join(' | '));
   check('小票含税/配送费/小费', ['税', '配送费', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent);
   check('提示备好现金', els['doneMsg'].textContent.includes('现金'), els['doneMsg'].textContent);
   check('提示这是演示（没有真打印机）', els['doneMsg'].textContent.includes('演示'), els['doneMsg'].textContent);
@@ -87,9 +88,9 @@ globalThis.prompt = () => '25';
   T.setMode(true); await sleep(900);
   check('自取免配送费', T.Q.delivery_fee === 0, T.Q.delivery_fee);
   T.setMode(false);
-  T.setAddr('136-20 Roosevelt Ave, Flushing, NY 11354');
+  T.setAddr('1 Pike St, New York, NY 10002');
   await sleep(3200); await T.refresh();
-  check('法拉盛超出 8 英里 → 拒单并禁用按钮', T.Q.ok === false && els['submit'].disabled === true, T.Q.error);
+  check('下东城超出 8 英里 → 拒单并禁用按钮', T.Q.ok === false && els['submit'].disabled === true, T.Q.error);
   T.setAddr('法拉盛 缅街 41-28'); await sleep(600); await T.refresh();
   check('中文地址提示用英文', els['msgs'].innerHTML.includes('英文街名'), els['msgs'].innerHTML.slice(0, 80));
 
