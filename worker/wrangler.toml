@@ -12,9 +12,8 @@ database_id = "eb9efcec-aa07-47e7-b9db-267fd82c823d"
 # 重新初始化：wrangler d1 execute nyc-orders --file=./schema.sql --remote
 # 注意 schema.sql 开头是 DROP TABLE IF EXISTS —— 有真实订单后别再无脑重跑
 
-[vars]
-AGENT_KEY = "dev-key-change-me"
-# 线上务必改成密钥：wrangler secret put AGENT_KEY
+# AGENT_KEY 走线上密钥，不写在配置里（wrangler secret put AGENT_KEY）
+# 同名 var 和 secret 同时存在会让 wrangler 报错，所以这里不保留占位值
 
 [observability]
 enabled = true
