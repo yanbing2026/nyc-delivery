@@ -40,10 +40,10 @@ DROP TABLE IF EXISTS settings;
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO settings (key, value) VALUES ('delivery', '{
   "enabled": true,
-  "free_miles": 0.5,
-  "tiers": [{"max": 2, "fee": 3.0}, {"max": 4, "fee": 6.0}, {"max": 6, "fee": 10.0}],
-  "per_mile_beyond": 2.5,
-  "max_miles": 8,
+  "free_miles": 5,
+  "tiers": [],
+  "per_mile_beyond": 2.0,
+  "max_miles": 0,
   "min_order": 20.0,
   "tax_rate": 0.08875,
   "prep_minutes": 20,

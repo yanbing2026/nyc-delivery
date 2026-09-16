@@ -198,6 +198,8 @@ export default {
         next.restaurant_addr = String(next.restaurant_addr || "").slice(0, 200);
         next.min_order = Number(next.min_order ?? cfg.min_order);
         next.max_miles = Number(next.max_miles ?? cfg.max_miles);
+        next.free_miles = Number(next.free_miles ?? cfg.free_miles);
+        next.per_mile_beyond = Number(next.per_mile_beyond ?? cfg.per_mile_beyond);
         next.tax_rate = Number(next.tax_rate ?? cfg.tax_rate);
         if (Array.isArray(next.tiers)) next.tiers = next.tiers.map((t) => ({ max: Number(t.max), fee: Number(t.fee) }));
         // 店址改了就把坐标重新解析一遍，不然里程全错

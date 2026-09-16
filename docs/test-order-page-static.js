@@ -84,13 +84,15 @@ globalThis.prompt = () => '25';
   check('提示备好现金', els['doneMsg'].textContent.includes('现金'), els['doneMsg'].textContent);
   check('提示这是演示（没有真打印机）', els['doneMsg'].textContent.includes('演示'), els['doneMsg'].textContent);
 
-  console.log('== 5. 自取 / 超范围 / 中文地址 ==');
+  console.log('== 5. 自取 / 远距离 / 中文地址 ==');
   T.setMode(true); await sleep(900);
   check('自取免配送费', T.Q.delivery_fee === 0, T.Q.delivery_fee);
   T.setMode(false);
   T.setAddr('1 Pike St, New York, NY 10002');
   await sleep(3200); await T.refresh();
-  check('下东城超出 8 英里 → 拒单并禁用按钮', T.Q.ok === false && els['submit'].disabled === true, T.Q.error);
+  check('下东城十几英里 → 不设上限，照算能送',
+    T.Q.ok === true && T.Q.delivery_fee === D.deliveryFee(T.Q.distance.miles, D.DEFAULT_DELIVERY).fee,
+    [T.Q.distance && T.Q.distance.miles, T.Q.delivery_fee]);
   T.setAddr('法拉盛 缅街 41-28'); await sleep(600); await T.refresh();
   check('中文地址提示用英文', els['msgs'].innerHTML.includes('英文街名'), els['msgs'].innerHTML.slice(0, 80));
 

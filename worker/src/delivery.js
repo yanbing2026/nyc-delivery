@@ -9,9 +9,11 @@ const M_PER_MILE = 1609.344;
 const UA = "nyc-delivery-worker/1.0";
 
 export const DEFAULT_DELIVERY = {
-  enabled: true, free_miles: 0.5,
-  tiers: [{ max: 2, fee: 3.0 }, { max: 4, fee: 6.0 }, { max: 6, fee: 10.0 }],
-  per_mile_beyond: 2.5, max_miles: 8, min_order: 20.0, tax_rate: 0.08875,
+  enabled: true, free_miles: 5,        // 5 英里内免费
+  tiers: [],                           // 不再用阶梯价
+  per_mile_beyond: 2.0,                // 超出部分每英里 $2
+  max_miles: 0,                        // 0 = 不设上限（纽约市内都送）
+  min_order: 20.0, tax_rate: 0.08875,
   prep_minutes: 20, tip_options: [0.15, 0.18, 0.2],
   payment: ["现金 Cash（送到付）"],
   restaurant_addr: "10-53 116th St, Flushing, NY 11356",

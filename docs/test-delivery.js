@@ -13,13 +13,13 @@ const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
     check(`${q || '(空)'} → ${ok ? '通过' : '拒绝'}`, ok === want, msg);
   }
 
-  console.log('== 2. 配送费阶梯（与后端 Python 完全一致） ==');
+  console.log('== 2. 配送费：5 英里内免费，超出每英里 $2（与后端 Python 完全一致） ==');
   const CFG = D.DEFAULT_DELIVERY;
-  for (const [miles, want] of [[0.3, 0], [0.5, 0], [0.51, 3], [2, 3], [2.1, 6], [4, 6], [4.1, 10], [6, 10], [7, 12.5], [8, 15]]) {
+  for (const [miles, want] of [[0.3, 0], [5, 0], [5.01, 0.02], [6, 2], [7, 4], [8, 6], [10, 10], [13.9, 17.8]]) {
     const got = D.deliveryFee(miles, CFG);
     check(`${miles} 英里 → $${want}`, got.ok && got.fee === want, got);
   }
-  check('9.5 英里超上限 → 不送', D.deliveryFee(9.5, CFG).ok === false, D.deliveryFee(9.5, CFG));
+  check('不设上限：19.3 英里 → $28.52', D.deliveryFee(19.26, CFG).fee === 28.52, D.deliveryFee(19.26, CFG));
 
   console.log('== 3. 真实地址解析 + 里程（调真接口） ==');
   const g1 = await D.geocode('40 Bayard St, New York, NY 10013');
@@ -43,7 +43,10 @@ const money = (v) => Math.round((Number(v) || 0) * 100) / 100;
   console.log(`     ${q.address.matched} → ${q.distance.miles} 英里 / ${q.distance.minutes} 分钟 / 配送费 $${q.delivery_fee} / 合计 $${q.total}`);
 
   const q2 = await D.quote(REST, '1 Pike St, New York, NY 10002', 42, CFG, 0.18);
-  check('下东城十几英里 → 超出配送范围（店在法拉盛了）', q2.ok === false && /超出配送范围/.test(q2.error), q2.error);
+  // 新规则不设上限：远单也照算（十几英里 ≈ $17），不再拒单
+  check('下东城十几英里照样能送，按超出里程计费',
+    q2.ok === true && q2.delivery_fee === D.deliveryFee(q2.distance.miles, CFG).fee,
+    [q2.distance && q2.distance.miles, q2.delivery_fee]);
   const q3 = await D.quote(REST, '1 Pike St, New York, NY 10002', 12, CFG, 0);
   check('$12 低于起送价 $20 → 拦', q3.ok === false && /起送/.test(q3.error), q3.error);
   const q4 = await D.quote(REST, '', 42, CFG, 0, true);

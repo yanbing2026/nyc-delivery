@@ -59,7 +59,9 @@ const quoteMiles = (q) => (q.distance || {}).miles;
 console.log("== 1. 基础接口 ==");
 check("GET /api/health", (await call("/api/health")).data.ok);
 const cfg = (await call("/api/config")).data;
-check("GET /api/config 给出店址与规则", cfg.ok && cfg.config.restaurant_addr.includes("Flushing") && cfg.config.max_miles === 8, cfg.config && cfg.config.max_miles);
+check("GET /api/config 给出店址与规则",
+  cfg.ok && cfg.config.restaurant_addr.includes("Flushing") && cfg.config.free_miles === 5 && cfg.config.max_miles === 0,
+  cfg.config && { addr: cfg.config.restaurant_addr, free: cfg.config.free_miles, max: cfg.config.max_miles });
 check("支付方式只有现金", (cfg.config.payment || []).join() === "现金 Cash（送到付）", cfg.config.payment);
 
 console.log("== 2. 地址与报价（真调 GeoSearch + OSRM） ==");
@@ -72,7 +74,8 @@ check("小费 = 5.02", q1.tip === 5.02, q1.tip);
 check("合计 = 小计 + 税 + 小费 + 配送费", q1.total === round2(q1.subtotal + q1.tax + q1.tip + q1.delivery_fee),
   [q1.subtotal, q1.tax, q1.tip, q1.delivery_fee, q1.total]);
 const q2 = (await call("/api/quote?address=" + encodeURIComponent("40 Bayard St, New York, NY 10013") + "&subtotal=27.9")).data;
-check("曼哈顿 13.9 英里 → 超出范围", q2.ok === false && /超出配送范围/.test(q2.error), q2.error);
+check("曼哈顿 13.9 英里 → 不设上限，按超出里程计费",
+  q2.ok === true && q2.delivery_fee === expectFee(quoteMiles(q2)), [quoteMiles(q2), q2.delivery_fee]);
 const q3 = (await call("/api/quote?subtotal=27.9&pickup=1")).data;
 check("自取免配送费 30.38", q3.ok && q3.delivery_fee === 0 && q3.total === 30.38, q3);
 const ac = (await call("/api/autocomplete?q=" + encodeURIComponent("100 Mott St"))).data;
@@ -118,7 +121,9 @@ console.log("== 3. 前端版 vs Worker 版公式对拍（防两边算不一样�
 const feeCases = [0.3, 0.5, 0.51, 2, 2.1, 4, 4.1, 6, 7, 8];
 check("配送费阶梯两边完全一致",
   feeCases.every((m) => S.deliveryFee(m, S.DEFAULT_DELIVERY).fee === W.deliveryFee(m, W.DEFAULT_DELIVERY).fee));
-check("9.5 英里两边都拒", S.deliveryFee(9.5, S.DEFAULT_DELIVERY).ok === false && W.deliveryFee(9.5, W.DEFAULT_DELIVERY).ok === false);
+check("9.5 英里两边都按超出里程算 $9（不再拒单）",
+  S.deliveryFee(9.5, S.DEFAULT_DELIVERY).fee === 9 && W.deliveryFee(9.5, W.DEFAULT_DELIVERY).fee === 9,
+  [S.deliveryFee(9.5, S.DEFAULT_DELIVERY).fee, W.deliveryFee(9.5, W.DEFAULT_DELIVERY).fee]);
 const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "59-04 99th St, Corona, NY 11368", 27.9, S.DEFAULT_DELIVERY, 0.18);
 // Worker 与前端以后可能用不同的地址服务（Worker 换成 Google 之后，同一个地址
 // 解析出的里程就会差一个档），所以这里只对拍与地址无关的部分 + 各自的金额自洽；
@@ -186,10 +191,12 @@ check("金额都四舍五入到分（客单价 41.07 不是 41.0733）",
 check("失败打印数 / 待人工核对数都在报表里", rep.summary.failed_prints !== undefined && rep.summary.manual_review !== undefined, rep.summary);
 
 console.log("== 7. 改规则（改完立刻生效） ==");
-const set = (await agent("/api/report/settings", { method: "POST", body: { max_miles: 14 } })).data;
-check("配送上限改成 14 英里", set.ok && set.config.max_miles === 14, set.error);
-const q4 = (await call("/api/quote?address=" + encodeURIComponent("40 Bayard St, New York, NY 10013") + "&subtotal=27.9")).data;
-check("13.7 英里那单现在能送了", q4.ok && q4.delivery_fee > 10, q4.error || q4.delivery_fee);
+const set = (await agent("/api/report/settings", { method: "POST", body: { per_mile_beyond: 3 } })).data;
+check("超出单价改成 $3/英里", set.ok && set.config.per_mile_beyond === 3, set.error);
+const q4 = (await call("/api/quote?address=" + encodeURIComponent("59-04 99th St, Corona, NY 11368") + "&subtotal=27.9")).data;
+check("改完立刻生效：同一条地址按新单价算",
+  q4.ok && q4.delivery_fee === expectFee(quoteMiles(q4), { ...W.DEFAULT_DELIVERY, per_mile_beyond: 3 }),
+  [quoteMiles(q4), q4.delivery_fee]);
 // 用一个两家地址服务都能解析的地址（没有 Google key 时也要跑得过）
 const addr = (await agent("/api/report/settings", { method: "POST", body: { restaurant_addr: "40 Bayard St, New York, NY 10013" } })).data;
 check("改店址会自动重新解析坐标", addr.ok && addr.config.restaurant.lat < 40.75, addr.config && addr.config.restaurant);
