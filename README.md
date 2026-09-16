@@ -16,8 +16,7 @@
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
-| `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key。店名/电话/菜单/运费全从后端读 | 推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs`，站点根就是它 |
-| `docs/admin.html` | **店员后台**：改店名/电话/菜单/价格/配送费规则，存到后端。进门先验口令（服务端校验），顾客那边没有入口 | 直接开 `.../admin.html`，口令就是 Worker 的 `AGENT_KEY` |
+| `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key。店名/电话/菜单全从后端读（内容来自 TabPOS 的发布） | 推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs`，站点根就是它 |
 | `docs/order.html` | 老链接的跳转页（转到 `./`），之前发出去的 `/order.html` 不会失效 | — |
 | `worker/` | **线上后端**：下单/取单/回写/日报汇总。Cloudflare Worker + D1，免费档 10 万请求/天 | 见 `worker/README.md`（4 条 wrangler 命令） |
 | `backend/` | 本地参考后端（Python 标准库零依赖）：同一套业务逻辑，方便没网/没账号时跑通全流程，也能当自托管方案 | `cd backend && sh run.sh 8899` → http://127.0.0.1:8899/order |
@@ -27,7 +26,7 @@
 ## 跑测试（全部无需密钥，但需要联网调纽约官方地址/路线接口）
 
 ```bash
-./run_tests.sh          # 一次跑完 7 个套件，共 289 项检查
+./run_tests.sh          # 一次跑完 6 个套件，共 263 项检查
 ```
 
 明细（也可以单独跑）：
@@ -38,20 +37,33 @@ cd backend && python3 test_delivery.py       # 41 项：地址解析（Google �
 cd backend && node test-order-page.js        # 38 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
 cd docs    && node test-wxmenu.js            # 23 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
 cd docs    && node test-order-page-static.js # 37 项：点单页（站点首页）—— 后端用桩，不依赖线上地址服务，结果确定
-cd docs    && node test-admin-static.js      # 39 项：店员后台 —— 口令门怎么挡人、改完到底发了什么
-cd worker  && node test_worker.mjs           # 63 项：Worker 全链路（真实 SQL + 真实地址/路线 + 店信息读写）
+cd worker  && node test_worker.mjs           # 76 项：Worker 全链路（真实 SQL + 真实地址/路线 + App 发布菜单/下单校验）
 ```
 
 `worker/test_worker.mjs` 说明：这台开发机是 PRoot/Termux 类环境，`wrangler dev` 起不来（workerd 需要 1GB 对齐内存，PRoot 给不了）。所以测试用 Node 内建 `node:sqlite` 冒充 D1，直接调用 Worker 的 `fetch` 处理器 —— 测的是**同一份 Worker 代码**，不是复刻。
 
-## 改店名 / 电话 / 菜单 / 配送费规则
+## 菜单和店信息：以 TabPOS 为准（没有网页后台）
 
-不用改代码、不用重新发布：打开 `docs/admin.html`（线上是 `.../admin.html`），填后端地址 + 口令 → 读取 → 改 → 保存，顾客刷新点单页就是新的。
+**店里那台安卓设备上的 TabPOS 就是后台** —— 菜单、分类、价格、售完、店名、电话、地址、税率、小费档位都在 App 里维护，App 发布上来，网站只读：
 
-- **口令 = Worker 的 `AGENT_KEY`**（`wrangler secret` 里那把，也记在本地 `.env`）。后台的门锁是**服务端校验**（`GET /api/report/verify`）：口令不对进不去，页面里没有可猜的密码
-- 口令只存在店员那台浏览器的 localStorage；拿不到口令的人只能看不能改（保存接口服务端一律再验一次）
-- 店名/电话/菜单存在 D1 的 `settings` 表（`shop` / `menu`），改完**立刻生效**；下单时金额仍由服务端按菜价重算
-- 菜品的 `id` 是历史订单的存档键，改名字改价格都不影响旧订单，但**别改 id**
+```
+TabPOS（App，唯一编辑入口）
+   │ POST /api/pos/publish   Header: x-agent-key
+   ▼
+Worker + D1（settings 表里的 shop / menu / pos 三行 = 网站的唯一真相源）
+   │ GET /api/config
+   ▼
+点单页（顾客手机）
+```
+
+- **云端连不进店里局域网**，所以只能 App 主动推。反过来说：App 关机/离线，网站照常点单（用的是上一次发布的快照）
+- `POST /api/pos/publish` 直接吃 TabPOS 的原生形状：`categories[{name,ord}]` + `items[{id,name,price,category,available}]` + `shop{companyName,companyAddress,companyPhone,taxRate,suggestedTips,...}`（App 那边不用为了对接拼数据结构）
+- 发布失败不会写坏线上：**没价格的菜被跳过并回报 `skipped`**、**店址解析不出来整份拒绝**（不然全站里程全错）
+- 下单校验：服务端按**库里的菜单价**重算（网页传的价不作数），App 里下架/售完的菜直接拒单
+- `GET /api/config` 里带 `pos: {at, device, items, available, skipped}`，能看出线上菜单是不是 App 最新发布的
+- 应急通道：`POST /api/report/settings` 也还能改 `shop`/`menu`（curl 用，没有网页入口）。正常情况下**别用** —— 下次 App 发布会覆盖它
+
+`id` 是历史订单的存档键：改菜名改价格都不影响旧订单，但**别改 id**。
 
 ## 关键业务规则（改店的时候先看这里）
 

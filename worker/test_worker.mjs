@@ -43,7 +43,8 @@ const call = async (path, { method = "GET", body, headers = {} } = {}) => {
   return { status: res.status, data };
 };
 const agent = (path, opts = {}) => call(path, { ...opts, headers: { "x-agent-key": "test-key", ...(opts.headers || {}) } });
-const MENU = [{ name: "海蛎煎", qty: 2, price: 12.95 }, { name: "白米饭", qty: 1, price: 2.0 }];  // 小计 27.90
+// 必须带菜单里的 id：下单现在按库里菜单校验（价格也按库里的算，前端传价不作数）
+const MENU = [{ id: "a1", name: "海蛎煎", qty: 2, price: 12.95 }, { id: "c3", name: "白饭", qty: 1, price: 2.0 }];  // 小计 27.90
 
 // 金额断言一律按「公式自洽」判，不写死某一家地址服务解析出来的坐标：
 // 同一条地址在 NYC 官方 / Nominatim / 换 Google 之后里程能差一个档，
@@ -131,7 +132,7 @@ check("9.5 英里 → $10（超出 4.5 英里 → 按 5 英里计，不再拒单
 console.log("== 4. 下单（金额服务端重算） ==");
 const bad = await call("/api/order", { method: "POST", body: { items: MENU } });
 check("不填地址 → 拒单", bad.status === 400 && /英文街名|地址/.test(bad.data.error), bad.data.error);
-const low = await call("/api/order", { method: "POST", body: { items: [{ name: "白米饭", qty: 1, price: 2 }], address: "59-04 99th St, Corona, NY 11368" } });
+const low = await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 1 }], address: "59-04 99th St, Corona, NY 11368" } });
 check("未到起送价 → 拒单", low.status === 400 && /起送/.test(low.data.error), low.data.error);
 const created = await call("/api/order", { method: "POST", body: {
   items: MENU, address: "59-04 99th St, Corona, NY 11368", customer: "张先生", phone: "917-555-0123",
@@ -164,7 +165,7 @@ const dn = await agent("/api/agent/status", { method: "POST", body: { id: o.no, 
 check("回写完成 + 骑手实收现金 40", dn.data.order.status === "done" && dn.data.order.cash_collected === 40, dn.data.order);
 
 console.log("== 6. 日报汇总（店里 App 对账用） ==");
-await call("/api/order", { method: "POST", body: { items: [{ name: "白米饭", qty: 10, price: 5 }], pickup: true } });
+await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true } });
 // 把还没结束的单都走完（模拟店里 App：打印→完成→登记实收现金）
 const open = (await agent("/api/agent/orders?limit=50")).data.orders.filter((x) => x.status !== "done");
 for (const x of open) {
@@ -240,6 +241,51 @@ check("没口令改不了店名/菜单", noKey.ok === false, noKey.error);
 await agent("/api/report/settings", { method: "POST", body: { shop: JSON.parse(SHOP0), menu: JSON.parse(MENU0) } });
 const cfgBack = (await call("/api/config")).data;
 check("测试数据已还原", JSON.stringify(cfgBack.shop) === SHOP0 && JSON.stringify(cfgBack.menu) === MENU0, cfgBack.shop);
+
+console.log("== 7c. 店里 App 发布菜单 + 店信息（App 就是后台） ==");
+const pub = (await agent("/api/pos/publish", { method: "POST", body: {
+  device: "柜台平板",
+  shop: { companyName: "测试小馆 B", companyPhone: "212-345-6789", companyExtra: "测试口号",
+    companyAddress: "10-53 116th St", companyAddress2: "Flushing, NY 11356",
+    taxRate: 0.08875, suggestedTips: [0.15, 0.2], paymentMethods: ["Cash"] },
+  categories: [{ name: "招牌", ord: 0 }, { name: "饮品", ord: 1 }],
+  items: [{ id: "p1", name: "测试菜一", price: 11.5, category: "招牌", available: 1 },
+    { id: "p2", name: "测试菜二", price: 6, category: "招牌", available: 0 },
+    { id: "p3", name: "测试饮", price: 3, category: "饮品", available: 1 },
+    { id: "p4", name: "没价格的菜", category: "饮品", available: 1 }],
+}})).data;
+check("发布成功并回报条数（没价格的被跳过）",
+  pub.ok && pub.published.items === 3 && pub.published.categories === 2 && pub.published.skipped === 1, pub.published);
+const cfgP = (await call("/api/config")).data;
+check("网站菜单按 App 的分类分组、顺序按 App 的 ord",
+  cfgP.menu.map((c) => c.name).join(">") === "招牌>饮品", cfgP.menu.map((c) => c.name));
+check("售完的菜不显示给顾客", !cfgP.menu.some((c) => c.items.some((i) => i.id === "p2")), cfgP.menu);
+check("店名/电话/口号跟着 App 走",
+  cfgP.shop.name === "测试小馆 B" && cfgP.shop.phone === "212-345-6789" && cfgP.shop.slogan === "测试口号", cfgP.shop);
+check("税率/小费档位也跟着 App 走",
+  cfgP.config.tax_rate === 0.08875 && JSON.stringify(cfgP.config.tip_options) === "[0.15,0.2]",
+  [cfgP.config.tax_rate, cfgP.config.tip_options]);
+check("配置里带「最后一次发布」的时间和设备", !!(cfgP.pos && cfgP.pos.at && cfgP.pos.device === "柜台平板"), cfgP.pos);
+
+const forged = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", name: "测试菜一", qty: 1, price: 0.01 }], address: "59-04 99th St, Corona, NY 11368" } })).data;
+check("伪造的价格不作数（按菜单价 11.5 → 未到起送价被挡）", forged.ok === false && /起送/.test(forged.error || ""), forged.error);
+const soldOut = (await call("/api/order", { method: "POST", body: { items: [{ id: "p2", qty: 1 }], address: "59-04 99th St, Corona, NY 11368" } })).data;
+check("售完的菜下不了单", soldOut.ok === false && /售完/.test(soldOut.error || ""), soldOut.error);
+const gone = (await call("/api/order", { method: "POST", body: { items: [{ id: "nope", qty: 1 }], address: "59-04 99th St, Corona, NY 11368" } })).data;
+check("已下架的菜下不了单", gone.ok === false && /下架/.test(gone.error || ""), gone.error);
+const good = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", qty: 2 }, { id: "p3", qty: 1 }], pickup: true } })).data;
+check("正常下单：金额按菜单价算（11.5×2 + 3 = 26）", good.ok && good.order.subtotal === 26, good.order && good.order.subtotal);
+const badAddr2 = (await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyAddress: "乱写的地址" }, items: [{ id: "z1", name: "z", price: 1, category: "x" }] } })).data;
+check("店址解不出来 → 拒绝发布（不然全站里程都是错的）", badAddr2.ok === false && /店址/.test(badAddr2.error || ""), badAddr2.error);
+check("拒绝发布时菜单没被改坏", (await call("/api/config")).data.menu.some((c) => c.items.some((i) => i.id === "p1")));
+
+// 还原成演示菜单/店信息：后面还有用例要用默认菜单里的 id
+await agent("/api/pos/publish", { method: "POST", body: { shop: JSON.parse(SHOP0), menu: JSON.parse(MENU0) } });
+const cfgBack2 = (await call("/api/config")).data;
+check("测试数据已还原（后面的用例还要用默认菜单）",
+  cfgBack2.shop.name === JSON.parse(SHOP0).name && cfgBack2.menu.length === JSON.parse(MENU0).length,
+  [cfgBack2.shop.name, cfgBack2.menu.length]);
 
 console.log("== 8. 限流（同一 IP 一小时 20 单） ==");
 for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));

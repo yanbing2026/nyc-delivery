@@ -33,6 +33,8 @@ export const DEFAULT_MENU = [
 
 const MAX_CATEGORIES = 30, MAX_ITEMS_PER_CAT = 60;
 const str = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+// 安卓那边传的是 SQLite 的 0/1，网页传的是 true/false —— 都当布尔收
+const boolish = (v) => !(v === false || v === 0 || v === "0" || v === "false" || v === "no");
 const money2 = (v) => Math.round(Number(v) * 100) / 100;
 const cloneMenu = (m) => m.map((c) => ({ name: c.name, items: c.items.map((i) => ({ ...i })) }));
 
@@ -61,7 +63,8 @@ export function buildMenu(input) {
       const price = Number(it && it.price);
       if (!id || !name || seen.has(id) || !Number.isFinite(price) || price < 0 || price > 999) { dropped++; continue; }
       seen.add(id);
-      items.push({ id, name, en: str(it.en, 60), desc: str(it.desc, 40), price: money2(price) });
+      items.push({ id, name, en: str(it.en, 60), desc: str(it.desc, 40), price: money2(price),
+        available: boolish(it.available) });
     }
     if (items.length) cats.push({ name: str(c.name, 30) || "菜单", items });
   }
@@ -73,6 +76,59 @@ export function buildMenu(input) {
 
 // 读的时候用这个：解析不出来就退回默认菜单（页面上宁可是默认菜，也不能空着）
 export function readMenu(stored) {
-  const r = buildMenu(stored);
+  const r = buildMenu(stored && stored.length ? stored.map((c) => ({ ...c, items: c.items })) : stored);
   return r.ok ? r.menu : cloneMenu(DEFAULT_MENU);
+}
+
+// 给顾客看的菜单：售完的先不显示（下单时仍会被挡，见 findItem/available 判断）
+export function publicMenu(menu) {
+  return (menu || []).map((c) => ({ name: c.name, items: c.items.filter((i) => i.available !== false)
+    .map(({ id, name, en, desc, price }) => ({ id, name, en, desc, price })) })).filter((c) => c.items.length);
+}
+
+export function findItem(menu, id) {
+  const want = str(id, 24);
+  if (!want) return null;
+  for (const c of menu || []) for (const it of c.items) if (it.id === want) return it;
+  return null;
+}
+
+// 把 TabPOS 那边的东西整理成站点用的菜单 + 店信息。
+// TabPOS 有两张表：categories(name, ord) 和 menu_items(id, name, price, category, available, ...)，
+// 所以这里要接住"分好类的"和"平铺的"两种形状 —— App 那边就不用为了对接而拼数据结构。
+export function buildFromPos(b) {
+  const body = b && typeof b === "object" ? b : {};
+  const cats = Array.isArray(body.categories) ? body.categories : [];
+  const list = Array.isArray(body.items) ? body.items : (Array.isArray(body.menu) ? body.menu : null);
+  if (!list) return { ok: false, error: "没有收到 items 或 menu（TabPOS 的菜单是空的？）" };
+  if (list.length && list[0] && Array.isArray(list[0].items)) return buildMenu(list);   // 已经是分类结构
+
+  const ord = new Map();
+  cats.forEach((c, i) => ord.set(str(c && c.name, 30) || "菜单", Number.isFinite(Number(c && c.ord)) ? Number(c.ord) : i));
+  const groups = new Map();
+  for (const it of list) {
+    const cat = str(it && it.category, 30) || "菜单";
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(it);
+  }
+  const names = [...groups.keys()].sort((a, b2) => (ord.has(a) ? ord.get(a) : 9999) - (ord.has(b2) ? ord.get(b2) : 9999));
+  const grouped = names.map((n) => ({ name: n, items: groups.get(n).map((it) => ({
+    id: it && it.id, name: it && it.name, en: (it && (it.en || it.name_en)) || "", desc: (it && it.desc) || "",
+    price: it && it.price, available: boolish(it && it.available) })) }));
+  return buildMenu(grouped);
+}
+
+// 店信息（TabPOS 的 PosSettings 字段名）
+export function shopFromPos(s) {
+  const o = s && typeof s === "object" ? s : {};
+  const addr2 = str(o.companyAddress2, 120);
+  return {
+    name: str(o.companyName || o.name, 40) || DEFAULT_SHOP.name,
+    phone: str(o.companyPhone || o.phone, 30),
+    slogan: str(o.companyExtra || o.slogan, 60),
+    address: [str(o.companyAddress || o.address, 160), addr2].filter(Boolean).join(", "),
+    tax_rate: Number(o.taxRate ?? o.tax_rate),
+    tip_options: Array.isArray(o.suggestedTips) ? o.suggestedTips.map(Number).filter((x) => x > 0 && x <= 0.5) : null,
+    payment: Array.isArray(o.paymentMethods) ? o.paymentMethods.map((x) => str(x, 30)).filter(Boolean) : null,
+  };
 }

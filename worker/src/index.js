@@ -75,11 +75,22 @@ const publicOrder = (r) => ({
 });
 
 async function createOrder(env, body, ip) {
-  const items = Array.isArray(body.items) ? body.items : [];
-  if (!items.length) return json({ ok: false, error: "购物车是空的" }, 400);
+  const asked = Array.isArray(body.items) ? body.items : [];
+  if (!asked.length) return json({ ok: false, error: "购物车是空的" }, 400);
   const cfg = await getSettings(env);
   const pickup = !!body.pickup;
-  const subtotal = D.money(items.reduce((s, i) => s + Number(i.price || 0) * Number(i.qty || 1), 0));
+  // 菜单以店里发布上来的为准：菜名和价格都从库里取，不信前端传的。
+  // 顺带挡住"已下架/已售完"和下架后还挂着的旧页面。
+  const menu = await getMenu(env);
+  const items = [];
+  for (const a of asked.slice(0, 60)) {
+    const hit = C.findItem(menu, a && a.id);
+    if (!hit) return json({ ok: false, error: `菜单里没有这道菜了（可能刚下架）：${String((a && a.name) || (a && a.id) || "?").slice(0, 40)}` }, 400);
+    if (hit.available === false) return json({ ok: false, error: `这道菜已售完：${hit.name}` }, 400);
+    const qty = Math.max(1, Math.min(99, Math.floor(Number((a && a.qty) || 1) || 1)));
+    items.push({ id: hit.id, name: hit.name, en: hit.en || "", price: hit.price, qty, amount: D.money(hit.price * qty) });
+  }
+  const subtotal = D.money(items.reduce((s, i) => s + i.price * i.qty, 0));
   if (!pickup && subtotal < cfg.min_order)
     return json({ ok: false, error: `还没到起送价 $${cfg.min_order.toFixed(2)}（当前 $${subtotal.toFixed(2)}）` }, 400);
 
@@ -120,7 +131,8 @@ export default {
       // 前端可读的配置（不含密钥）：配送费规则 + 店名/电话 + 菜单
       if (p === "/api/config") {
         const cfg = await getSettings(env);
-        return json({ ok: true, shop: await getShop(env), menu: await getMenu(env), config: {
+        return json({ ok: true, shop: await getShop(env), menu: C.publicMenu(await getMenu(env)),
+          pos: await getRow(env, "pos"), config: {
           restaurant_addr: cfg.restaurant_addr, restaurant: cfg.restaurant, max_miles: cfg.max_miles,
           min_order: cfg.min_order, tax_rate: cfg.tax_rate, tiers: cfg.tiers, free_miles: cfg.free_miles,
           per_mile_beyond: cfg.per_mile_beyond, prep_minutes: cfg.prep_minutes, tip_options: cfg.tip_options,
@@ -206,6 +218,38 @@ export default {
           FROM orders WHERE date(created_at) BETWEEN ?1 AND ?2`).bind(from, to).first();
         if (r) r.cash_difference = Math.round(((r.cash_collected || 0) - (r.revenue || 0)) * 100) / 100;
         return json({ ok: true, from, to, summary: r });
+      }
+
+      // 店里那个 App（TabPOS）把菜单和店信息发布上来 —— App 是唯一的后台，
+      // 网站只读它发布的内容（云端连不进店里局域网，所以只能 App 主动推）
+      if (p === "/api/pos/publish" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        const m = C.buildFromPos(b);
+        if (!m.ok) return json({ ok: false, error: m.error }, 400);
+        const hasShop = !!(b.shop || b.settings);
+        const s = C.shopFromPos(b.shop || b.settings || {});
+        const cfg = await getSettings(env);
+        const next = { ...cfg };
+        if (Number.isFinite(s.tax_rate) && s.tax_rate > 0 && s.tax_rate < 0.5) next.tax_rate = s.tax_rate;
+        if (s.tip_options && s.tip_options.length) next.tip_options = s.tip_options;
+        if (s.payment && s.payment.length) next.payment = s.payment;
+        // 店址改了要重新解析坐标，不然全站里程都错；解不出来宁可拒绝发布
+        if (s.address && s.address !== cfg.restaurant_addr) {
+          const g = await D.geocode(s.address, env.GOOGLE_MAPS_API_KEY);
+          if (!g.ok) return json({ ok: false, error: "店址解析失败（网站没法算里程）：" + g.error }, 400);
+          next.restaurant_addr = s.address;
+          next.restaurant = { lat: g.lat, lon: g.lon };
+        }
+        await saveSettings(env, next);
+        const shop = hasShop ? await saveRow(env, "shop", { name: s.name, phone: s.phone, slogan: s.slogan })
+          : await getShop(env);
+        const menu = await saveRow(env, "menu", m.menu);
+        const all = menu.reduce((n, c) => n + c.items.length, 0);
+        const pub = C.publicMenu(menu).reduce((n, c) => n + c.items.length, 0);
+        const meta = { at: nowISO(), device: String(b.device || "").slice(0, 40), items: all,
+          categories: menu.length, available: pub, skipped: m.dropped || 0 };
+        await saveRow(env, "pos", meta);
+        return json({ ok: true, published: meta, shop, menu });
       }
 
       // 后台页面的门锁：只验口令对不对，不动任何数据
