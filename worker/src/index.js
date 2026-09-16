@@ -156,7 +156,8 @@ export default {
         return await createOrder(env, await request.json().catch(() => ({})), ip);
 
       // ---- 店里设备（Agent）用的接口，需要 agent key ----
-      const needKey = p.startsWith("/api/agent/") || p.startsWith("/api/report");
+      // /api/pos/ 也要口令：发布接口要是敞着，谁都能改店里的菜单和价格
+      const needKey = p.startsWith("/api/agent/") || p.startsWith("/api/report") || p.startsWith("/api/pos/");
       if (needKey && (!env.AGENT_KEY || agentKey !== env.AGENT_KEY))
         return json({ ok: false, error: "agent key 不对" }, 403);
 

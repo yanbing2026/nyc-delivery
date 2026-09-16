@@ -68,7 +68,9 @@ console.log("== 2. 地址与报价（真调 GeoSearch + OSRM） ==");
 const q1 = (await call("/api/quote?address=" + encodeURIComponent("59-04 99th St, Corona, NY 11368") + "&subtotal=27.9&tip_rate=0.18")).data;
 check("报价成功", q1.ok, q1.error);
 check("解析到 11368", q1.address && q1.address.zip === "11368", q1.address);
-check("配送费跟里程档位一致（不写死坐标）", q1.delivery_fee === expectFee(quoteMiles(q1)), [quoteMiles(q1), q1.delivery_fee]);
+// 三家地址服务全挂时会走 $5 兜底（那条另有断言）——这时没有里程可比，跳过而不是报红
+if (quoteMiles(q1) == null) console.log("  ⤵ 地址服务这次全挂了（没有里程可比），跳过档位一致性检查");
+else check("配送费跟里程档位一致（不写死坐标）", q1.delivery_fee === expectFee(quoteMiles(q1)), [quoteMiles(q1), q1.delivery_fee]);
 check("税 = 27.9 × 8.875% = 2.48", q1.tax === 2.48, q1.tax);
 check("小费 = 5.02", q1.tip === 5.02, q1.tip);
 check("合计 = 小计 + 税 + 小费 + 配送费", q1.total === round2(q1.subtotal + q1.tax + q1.tip + q1.delivery_fee),
@@ -243,6 +245,8 @@ const cfgBack = (await call("/api/config")).data;
 check("测试数据已还原", JSON.stringify(cfgBack.shop) === SHOP0 && JSON.stringify(cfgBack.menu) === MENU0, cfgBack.shop);
 
 console.log("== 7c. 店里 App 发布菜单 + 店信息（App 就是后台） ==");
+const noKeyPub = (await call("/api/pos/publish", { method: "POST", body: { items: [{ id: "hack", name: "黑客菜", price: 0.01, category: "x" }] } })).data;
+check("没口令发布不了（否则谁都能改菜单）", noKeyPub.ok === false, noKeyPub.error);
 const pub = (await agent("/api/pos/publish", { method: "POST", body: {
   device: "柜台平板",
   shop: { companyName: "测试小馆 B", companyPhone: "212-345-6789", companyExtra: "测试口号",
