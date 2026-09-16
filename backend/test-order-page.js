@@ -110,7 +110,8 @@ async function up() {
     const q = T.Q;
     check('报价成功', q && q.ok, q && q.error);
     check('解析到曼哈顿唐人街 (10013)', q.address && q.address.zip === '10013', q.address);
-    check('算出驾车里程 0.1~1.5 英里', q.distance && q.distance.miles > 0.05 && q.distance.miles < 1.5, q.distance);
+    // 店在法拉盛，唐人街是十几英里（原来 0.1~1.5 是店还在唐人街时写的）
+    check('算出驾车里程 10~16 英里', q.distance && q.distance.miles > 10 && q.distance.miles < 16, q.distance);
     check('配送费按阶梯给出数字', typeof q.delivery_fee === 'number', q.delivery_fee);
     check('税 = 小计 × 8.875%', q.tax === Math.round(T.Q.subtotal * 0.08875 * 100) / 100, [q.tax, T.Q.subtotal]);
     check('小费默认 0（未选）', q.tip === 0, q.tip);
@@ -135,7 +136,7 @@ async function up() {
     const doneNo = els['doneNo'].textContent;
     check('弹出接单页并带订单号', /订单号 \d+/.test(doneNo), doneNo);
     check('提示备好现金', els['doneMsg'].textContent.includes('现金'), els['doneMsg'].textContent);
-    check('小票正文含送餐地址', els['doneRcpt'].textContent.includes('MOTT ST'), els['doneRcpt'].textContent.split('\n').slice(0, 12).join(' | '));
+    check('小票正文含送餐地址', /Mott St/i.test(els['doneRcpt'].textContent), els['doneRcpt'].textContent.split('\n').slice(0, 12).join(' | '));
     check('小票含税/配送费/小费', ['税', '配送费', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)));
 
     const orderNo = doneNo.replace('订单号 ', '');
@@ -161,14 +162,16 @@ async function up() {
       deliveryTotal - T.Q.total === feeDelivery, [T.Q.total, deliveryTotal, feeDelivery]);
     check('自取隐藏地址框', els['deliveryBox'].style.display === 'none', els['deliveryBox'].style.display);
 
-    console.log('== 7. 超范围地址被挡（法拉盛 11 英里 > 8 英里上限） ==');
+    console.log('== 7. 远距离地址（不设上限，按超出里程计费） ==');
     T.setMode(false);
-    T.setAddr('136-20 Roosevelt Ave, Flushing, NY 11354');
+    T.setAddr('1 Pike St, New York, NY 10002');        // 店在法拉盛，这是十几英里
     await sleep(3200);
     await T.refresh();
-    check('报价失败并说明超出范围', T.Q && T.Q.ok === false && /超出配送范围/.test(T.Q.error || ''), T.Q && T.Q.error);
-    check('下单按钮被禁用', els['submit'].disabled === true, els['submit'].disabled);
-    check('页面显示红色错误', els['msgs'].innerHTML.includes('msg err'), els['msgs'].innerHTML.slice(0, 80));
+    check('十几英里照算能送（不设距离上限）', T.Q && T.Q.ok === true, T.Q && T.Q.error);
+    check('配送费 = 5 英里内 $0 + 超出每英里 $2（不足 1 英里按 1 英里）',
+      T.Q && T.Q.delivery_fee === Math.ceil(Math.max(0, T.Q.distance.miles - 5)) * 2,
+      T.Q && [T.Q.distance && T.Q.distance.miles, T.Q.delivery_fee]);
+    check('下单按钮可用', els['submit'].disabled === false, els['submit'].disabled);
 
     console.log('== 8. 中文地址被挡（纽约系统不认） ==');
     T.setAddr('法拉盛 缅街 41-28');

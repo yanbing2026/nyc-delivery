@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -24,6 +25,14 @@ from decimal import Decimal, ROUND_HALF_UP
 GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search"
 GEOSEARCH_AC = "https://geosearch.planninglabs.nyc/v2/autocomplete"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
+GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json"
+GOOGLE_TIMEOUT = 4
+
+
+def google_key() -> str:
+    """Google Geocoding 的 key。从环境变量读（Worker 那边用的是同一个 key 的密钥，
+    浏览器那份走 Worker 的 /api/autocomplete 代理，key 不出服务端）。"""
+    return os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
 OSRM = "https://router.project-osrm.org/route/v1/driving"
 UA = "delivery-quote/1.0 (contact: shop owner)"
 CACHE: dict[str, tuple[float, object]] = {}
@@ -105,6 +114,36 @@ def geocode_candidates(query: str, limit: int = 5) -> list[dict]:
     query = (query or "").strip()
     if not query:
         return []
+    # 第一档 Google：有 SLA、能解 Queens 那种 10-53 连字符门牌号（两个免费源都不行）
+    key = google_key()
+    if key:
+        try:
+            data = _get(GOOGLE_GEOCODE,
+                        {"address": query, "key": key, "language": "en", "region": "us"},
+                        timeout=GOOGLE_TIMEOUT)
+            if data.get("status") in ("OK", "ZERO_RESULTS"):
+                out = []
+                # 只采信精确匹配：Google 会把瞎编地址脑补成附近某条街
+                # （实测 "9999 Nowhere Blvd, New York, NY 10013" → 40 Lispenard St，
+                # 且带 partial_match: true）。放过去等于让骑手送错地址。
+                exact = [r for r in (data.get("results") or []) if not r.get("partial_match")]
+                for r in exact[: max(1, min(limit, 10))]:
+                    comp: dict = {}
+                    for c in r.get("address_components") or []:
+                        for t in c.get("types") or []:
+                            comp.setdefault(t, c)
+                    b = comp.get("sublocality_level_1") or comp.get("sublocality") or comp.get("locality") or {}
+                    pc = comp.get("postal_code") or {}
+                    loc = (r.get("geometry") or {}).get("location") or {}
+                    if isinstance(loc.get("lat"), (int, float)) and isinstance(loc.get("lng"), (int, float)):
+                        out.append({"label": r.get("formatted_address", ""), "name": "",
+                                    "borough": b.get("long_name", ""),
+                                    "postalcode": pc.get("short_name", ""),
+                                    "lat": loc["lat"], "lon": loc["lng"], "source": "google"})
+                if out:
+                    return out
+        except Exception:
+            pass
     try:
         data = _get(GEOSEARCH, {"text": query, "size": max(1, min(limit, 10))})
         cands = _norm_features(data)
@@ -166,19 +205,17 @@ def route_miles(a: dict, b: dict) -> dict:
 
 DEFAULT_DELIVERY = {
     "enabled": True,
-    "free_miles": 0.5,                       # 这个距离内不收配送费
-    "tiers": [{"max": 2, "fee": 3.0},        # ≤2 英里 $3
-              {"max": 4, "fee": 6.0},        # ≤4 英里 $6
-              {"max": 6, "fee": 10.0}],      # ≤6 英里 $10
-    "per_mile_beyond": 2.5,                  # 超过最后一档，每英里加
-    "max_miles": 8,                          # 超出不送
+    "free_miles": 5,                         # 5 英里内不收配送费
+    "tiers": [],                             # 不再用阶梯价
+    "per_mile_beyond": 2.0,                  # 超出部分每英里 $2（不足 1 英里按 1 英里算）
+    "max_miles": 0,                          # 0 = 不设上限（纽约市内都送）
     "min_order": 20.0,                       # 起送金额
     "tax_rate": 0.08875,                     # 纽约市销售税 8.875%
     "prep_minutes": 20,                      # 出餐时间，加到送达预估上
     "tip_options": [0.15, 0.18, 0.20],
     "payment": ["现金 Cash（送到付）"],     # 目前只收现金
-    "restaurant_addr": "40 Bayard St, New York, NY 10013",   # ← 改成你自己的店址
-    "restaurant": {"lat": 40.715285, "lon": -73.998012},
+    "restaurant_addr": "10-53 116th St, Flushing, NY 11356",   # ← 改成你自己的店址
+    "restaurant": {"lat": 40.7873972, "lon": -73.8511667},
     "fallback_fee": 5.0,        # 路线服务抽风时用的兜底配送费（订单会标记待人工确认）
 }
 
@@ -200,10 +237,12 @@ def delivery_fee(miles: float, cfg: dict) -> dict:
             return {"ok": True, "miles": m, "fee": float(tier["fee"]),
                     "tier": "%.0f 英里内 $%.2f" % (float(tier["max"]), float(tier["fee"]))}
     last = max(t, key=lambda x: float(x["max"])) if t else {"max": free, "fee": 0.0}
-    extra = max(0.0, m - float(last["max"])) * beyond
+    # 超出部分按整英里向上取整：5~6 英里 $2、6~7 英里 $4 …… 不足 1 英里算 1 英里
+    charged = math.ceil(max(0.0, m - float(last["max"])))
+    extra = charged * beyond
     return {"ok": True, "miles": m, "fee": round(float(last["fee"]) + extra, 2),
-            "tier": "%.0f 英里 $%.2f + 超出 %.1f 英里 × $%.2f/英里" % (
-                float(last["max"]), float(last["fee"]), m - float(last["max"]), beyond)}
+            "tier": "%.0f 英里 $%.2f + 超出 %d 英里 × $%.2f/英里" % (
+                float(last["max"]), float(last["fee"]), charged, beyond)}
 
 
 def money(v) -> float:

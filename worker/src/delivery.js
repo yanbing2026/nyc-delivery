@@ -53,7 +53,11 @@ export async function geocodeCandidates(query, limit = 5, gkey = "") {
         const d = await r.json();
         if (d.status === "OK" || d.status === "ZERO_RESULTS") {
           const part = (x, type) => (x.address_components || []).find((c) => (c.types || []).includes(type));
-          const cands = (d.results || []).map((x) => {
+          // 只采信精确匹配：Google 会把瞎编地址脑补成附近某条街
+          // （实测 "9999 Nowhere Blvd, New York, NY 10013" → 40 Lispenard St，
+          // 且带 partial_match: true）。放过去等于让骑手送错地址。
+          const exact = (d.results || []).filter((x) => !x.partial_match);
+          const cands = exact.map((x) => {
             const borough = part(x, "sublocality_level_1") || part(x, "sublocality") || part(x, "locality");
             const pc = part(x, "postal_code");
             const loc = (x.geometry || {}).location || {};
