@@ -1,5 +1,5 @@
 // 纽约送餐里程/配送费（Worker 侧，ES 模块版）
-// 与 docs/delivery.js 同一套公式，由 test_delivery_parity.js 保证两边一致
+// 这里是唯一的定价实现（点单页已改成瘦客户端，只显示后端算好的金额）
 const GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search";
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
 const GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json";

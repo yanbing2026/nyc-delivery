@@ -76,7 +76,7 @@ summary{font-size:14px;color:var(--dim)}
 <div class="block">
   <div id="deliveryBox">
     <label>送餐地址（必须英文，从门牌号开始，带 5 位 ZIP）</label>
-    <input id="addr" placeholder="例：40 Bayard St, New York, NY 10013" oninput="onAddr()">
+    <input id="addr" placeholder="例：59-04 99th St, Corona, NY 11368" oninput="onAddr()">
     <div class="hint">纽约系统只认英文街名，中文地址搜不到。ZIP 很重要：同名街道在好几个区都有。</div>
     <div class="cands" id="cands" style="display:none"></div>
   </div>
@@ -104,10 +104,10 @@ summary{font-size:14px;color:var(--dim)}
 </div>
 
 <script src="./wxmenu.js"></script>
-<script src="./delivery.js"></script>
+<!-- 不再引入本地里程模块：地址解析/时长/运费全部由后端算（/api/quote 会带回 address_check） -->
 <script>
 const $=id=>document.getElementById(id);
-const DL=WXDelivery, D=DL.DEFAULT_DELIVERY;
+const PAY_DEFAULT='现金 Cash（送到付）';
 const MENU=[
  {name:'招牌',items:[{id:'a1',name:'海蛎煎',en:'Oyster Omelette',desc:'现点现做',price:12.95},
    {id:'a2',name:'红蟳米糕',en:'Steamed Rice w/ Crab',desc:'',price:32.95},
@@ -214,8 +214,8 @@ async function refresh(){
   $('quote').innerHTML=rows(q);
   const probs=[];
   if(!pickup){
-    const [okA,why]=DL.looksLikeAddress(addr);
-    if(!okA) probs.push(['warn',addr?('地址格式：'+why):'请填送餐地址，例如 40 Bayard St, New York, NY 10013']);
+    const [okA,why]=q.address_check||[true,''];
+    if(!okA) probs.push(['warn',addr?('地址格式：'+why):'请填送餐地址，例如 59-04 99th St, Corona, NY 11368']);
     if(q.address&&q.address.warning) probs.push(['warn','提示：'+q.address.warning+'（不对的话，点上面候选里的正确地址）']);
   }
   if(q.ok===false) probs.push(['err',q.error]);
@@ -237,7 +237,7 @@ function rows(q){
 $('submit').onclick=async()=>{
   $('submit').disabled=true; $('submit').textContent='提交中…';
   const body={items:items(),pickup,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
-    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:D.payment[0],
+    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:(cfg&&cfg.payment&&cfg.payment[0])||PAY_DEFAULT,
     address:pickup?'':$('addr').value.trim(),source:'pages-delivery'};
   let order=null,printMsg='';
   if(!backend){

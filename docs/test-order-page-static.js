@@ -4,7 +4,7 @@
    跑法：node test-order-page-static.js */
 const fs = require('fs');
 const path = require('path');
-const D = require('./delivery.js');        // 只用来对拍"后端算出来的运费"是否合规
+// 不需要本地里程模块了：运费由（桩）后端返回，页面只负责显示
 let fails = 0;
 const check = (n, c, e) => { console.log((c ? '  ✓ ' : '  ✗ ') + n + (c || e === undefined ? '' : '  ← ' + e)); if (!c) fails++; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -54,11 +54,18 @@ globalThis.fetch = async (u) => {
     const subtotal = money2(p.get('subtotal'));
     const tipRate = Number(p.get('tip_rate') || 0);
     const pickup = p.get('pickup') === '1';
+    const addr = p.get('address') || '';
+    // 与真 Worker 一致：中文地址会被判不合格，address_check 里带说明，同时 ok:false
+    const address_check = /[\u4e00-\u9fff]/.test(addr)
+      ? [false, '请用英文街名（纽约系统不认中文地址），例如 59-04 99th St, Corona, NY 11368']
+      : [true, ''];
+    if (!address_check[0])
+      return reply({ ok: false, error: address_check[1], address_check, subtotal, pickup, tax_rate: CFG.tax_rate, min_order: CFG.min_order });
     const miles = pickup ? 0 : MILES;
-    const fee = D.deliveryFee(miles, CFG).fee;
+    const fee = miles <= CFG.free_miles ? 0 : Math.ceil(miles - CFG.free_miles) * CFG.per_mile_beyond;  // 桩后端自己按规则算
     const tax = money2(subtotal * CFG.tax_rate);
     const tip = money2(subtotal * tipRate);
-    return reply({ ok: true, subtotal, pickup, tax_rate: CFG.tax_rate, min_order: CFG.min_order,
+    return reply({ ok: true, subtotal, pickup, tax_rate: CFG.tax_rate, min_order: CFG.min_order, address_check,
       address: pickup ? null : { input: '59-04 99th St, Corona, NY 11368',
         matched: '59-04 99th St, Flushing, NY 11368, USA', borough: 'Queens', zip: '11368',
         lat: 40.7499, lon: -73.8636, source: 'google' },
@@ -82,7 +89,6 @@ globalThis.fetch = async (u) => {
 (async () => {
   const dir = __dirname;
   eval(fs.readFileSync(path.join(dir, 'wxmenu.js'), 'utf8'));
-  eval(fs.readFileSync(path.join(dir, 'delivery.js'), 'utf8'));
   const html = fs.readFileSync(path.join(dir, 'order.html'), 'utf8');
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
   const code = scripts[scripts.length - 1].replace(/\bboot\(\);\s*$/, '');
@@ -110,7 +116,7 @@ globalThis.fetch = async (u) => {
   const q = T.Q;
   check('报价请求打到了后端 /api/quote', calls.some((c) => c.includes('/api/quote?')), calls.slice(-2));
   check('后端返回的运费被采纳（5.56 英里 → $2）', q && q.delivery_fee === 2, q && q.delivery_fee);
-  check('运费与规则自洽（页面不重算）', q && q.delivery_fee === D.deliveryFee(5.56, CFG).fee, q && [q.delivery_fee]);
+  check('页面显示的运费就是后端返回的数字（不重算）', q && q.delivery_fee === 2, q && [q.delivery_fee]);
   check('合计按后端返回显示', q && els['tot'].textContent === '$' + q.total.toFixed(2), [q && q.total, els['tot'].textContent]);
   check('报价区列出配送费与距离', els['quote'].innerHTML.includes('配送费') && els['quote'].innerHTML.includes('英里'), els['quote'].innerHTML.slice(0, 150));
   check('底栏显示件数与英里', els['barHint'].textContent.includes('件') && els['barHint'].textContent.includes('英里'), els['barHint'].textContent);
