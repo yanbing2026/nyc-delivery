@@ -59,6 +59,7 @@ Worker + D1（settings 表里的 shop / menu / pos 三行 = 网站的唯一真�
 - **云端连不进店里局域网**，所以只能 App 主动推。反过来说：App 关机/离线，网站照常点单（用的是上一次发布的快照）
 - `POST /api/pos/publish` 直接吃 TabPOS 的原生形状：`categories[{name,ord}]` + `items[{id,name,price,category,available}]` + `shop{companyName,companyAddress,companyPhone,taxRate,suggestedTips,...}`（App 那边不用为了对接拼数据结构）
 - 发布失败不会写坏线上：**没价格的菜被跳过并回报 `skipped`**、**店址解析不出来整份拒绝**（不然全站里程全错）
+- **每个菜可以单独决定"上不上网页"**（App 里菜单项的 `Show on the online menu`）：内部用的东西（员工餐、只店里卖的）关掉后，顾客菜单里看不到、拿旧页面提交也会被拒。这跟"售完"是两个字段（`publish` vs `available`），别混用
 - 下单校验：服务端按**库里的菜单价**重算（网页传的价不作数），App 里下架/售完的菜直接拒单
 - `GET /api/config` 里带 `pos: {at, device, items, available, skipped}`，能看出线上菜单是不是 App 最新发布的
 - 应急通道：`POST /api/report/settings` 也还能改 `shop`/`menu`（curl 用，没有网页入口）。正常情况下**别用** —— 下次 App 发布会覆盖它

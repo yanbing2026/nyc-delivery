@@ -64,7 +64,10 @@ export function buildMenu(input) {
       if (!id || !name || seen.has(id) || !Number.isFinite(price) || price < 0 || price > 999) { dropped++; continue; }
       seen.add(id);
       items.push({ id, name, en: str(it.en, 60), desc: str(it.desc, 40), price: money2(price),
-        available: boolish(it.available) });
+        available: boolish(it.available),
+        // publish=false = 内部用（员工餐、只店里卖的）：不上顾客菜单，下单也拒。
+        // 跟 available=false（售完，暂时）是两码事，所以分成两个字段存。
+        publish: boolish(it.publish) });
     }
     if (items.length) cats.push({ name: str(c.name, 30) || "菜单", items });
   }
@@ -80,10 +83,12 @@ export function readMenu(stored) {
   return r.ok ? r.menu : cloneMenu(DEFAULT_MENU);
 }
 
-// 给顾客看的菜单：售完的先不显示（下单时仍会被挡，见 findItem/available 判断）
+// 给顾客看的菜单：售完的、内部用的都不显示（下单时也都会被挡，见下单校验）
 export function publicMenu(menu) {
-  return (menu || []).map((c) => ({ name: c.name, items: c.items.filter((i) => i.available !== false)
-    .map(({ id, name, en, desc, price }) => ({ id, name, en, desc, price })) })).filter((c) => c.items.length);
+  return (menu || []).map((c) => ({ name: c.name,
+    items: c.items.filter((i) => i.available !== false && i.publish !== false)
+      .map(({ id, name, en, desc, price }) => ({ id, name, en, desc, price })) }))
+    .filter((c) => c.items.length);
 }
 
 export function findItem(menu, id) {
@@ -114,7 +119,8 @@ export function buildFromPos(b) {
   const names = [...groups.keys()].sort((a, b2) => (ord.has(a) ? ord.get(a) : 9999) - (ord.has(b2) ? ord.get(b2) : 9999));
   const grouped = names.map((n) => ({ name: n, items: groups.get(n).map((it) => ({
     id: it && it.id, name: it && it.name, en: (it && (it.en || it.name_en)) || "", desc: (it && it.desc) || "",
-    price: it && it.price, available: boolish(it && it.available) })) }));
+    price: it && it.price, available: boolish(it && it.available),
+    publish: boolish(it && it.publish) })) }));
   return buildMenu(grouped);
 }
 

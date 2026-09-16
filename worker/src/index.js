@@ -87,6 +87,8 @@ async function createOrder(env, body, ip) {
     const hit = C.findItem(menu, a && a.id);
     if (!hit) return json({ ok: false, error: `菜单里没有这道菜了（可能刚下架）：${String((a && a.name) || (a && a.id) || "?").slice(0, 40)}` }, 400);
     if (hit.available === false) return json({ ok: false, error: `这道菜已售完：${hit.name}` }, 400);
+    // 内部用的菜（App 里"不上网页"）：顾客菜单里根本没有，但也可能有人拿旧页面提交
+    if (hit.publish === false) return json({ ok: false, error: `这道菜只在店里卖，网页点不了：${hit.name}` }, 400);
     const qty = Math.max(1, Math.min(99, Math.floor(Number((a && a.qty) || 1) || 1)));
     items.push({ id: hit.id, name: hit.name, en: hit.en || "", price: hit.price, qty, amount: D.money(hit.price * qty) });
   }

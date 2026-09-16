@@ -256,14 +256,20 @@ const pub = (await agent("/api/pos/publish", { method: "POST", body: {
   items: [{ id: "p1", name: "测试菜一", price: 11.5, category: "招牌", available: 1 },
     { id: "p2", name: "测试菜二", price: 6, category: "招牌", available: 0 },
     { id: "p3", name: "测试饮", price: 3, category: "饮品", available: 1 },
-    { id: "p4", name: "没价格的菜", category: "饮品", available: 1 }],
+    { id: "p4", name: "没价格的菜", category: "饮品", available: 1 },
+    { id: "p5", name: "员工餐", price: 0, category: "招牌", available: 1, publish: 0 }],
 }})).data;
-check("发布成功并回报条数（没价格的被跳过）",
-  pub.ok && pub.published.items === 3 && pub.published.categories === 2 && pub.published.skipped === 1, pub.published);
+check("发布成功并回报条数（没价格的被跳过；内部用的也照样存下来）",
+  pub.ok && pub.published.items === 4 && pub.published.categories === 2 && pub.published.skipped === 1,
+  pub.published);
 const cfgP = (await call("/api/config")).data;
 check("网站菜单按 App 的分类分组、顺序按 App 的 ord",
   cfgP.menu.map((c) => c.name).join(">") === "招牌>饮品", cfgP.menu.map((c) => c.name));
 check("售完的菜不显示给顾客", !cfgP.menu.some((c) => c.items.some((i) => i.id === "p2")), cfgP.menu);
+check("内部用的菜（publish=0）不显示给顾客",
+  !cfgP.menu.some((c) => c.items.some((i) => i.id === "p5")), cfgP.menu.map((c) => c.items.map((i) => i.id)));
+check("内部用的菜在库里还在（只是不给顾客看）",
+  (await call("/api/config")).data.pos.items === 4);
 check("店名/电话/口号跟着 App 走",
   cfgP.shop.name === "测试小馆 B" && cfgP.shop.phone === "212-345-6789" && cfgP.shop.slogan === "测试口号", cfgP.shop);
 check("税率/小费档位也跟着 App 走",
@@ -277,6 +283,9 @@ const soldOut = (await call("/api/order", { method: "POST", body: { items: [{ id
 check("售完的菜下不了单", soldOut.ok === false && /售完/.test(soldOut.error || ""), soldOut.error);
 const gone = (await call("/api/order", { method: "POST", body: { items: [{ id: "nope", qty: 1 }], address: "59-04 99th St, Corona, NY 11368" } })).data;
 check("已下架的菜下不了单", gone.ok === false && /下架/.test(gone.error || ""), gone.error);
+// 内部用的菜：菜单里没有，但可能有人拿着旧页面提交 —— 必须挡住
+const internal = (await call("/api/order", { method: "POST", body: { items: [{ id: "p5", qty: 1 }], pickup: true } })).data;
+check("内部用的菜下不了单（只在店里卖）", internal.ok === false && /店里/.test(internal.error || ""), internal.error);
 const good = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", qty: 2 }, { id: "p3", qty: 1 }], pickup: true } })).data;
 check("正常下单：金额按菜单价算（11.5×2 + 3 = 26）", good.ok && good.order.subtotal === 26, good.order && good.order.subtotal);
 const badAddr2 = (await agent("/api/pos/publish", { method: "POST", body: {
