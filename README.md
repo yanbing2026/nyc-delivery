@@ -26,7 +26,7 @@
 ## 跑测试（全部无需密钥，但需要联网调纽约官方地址/路线接口）
 
 ```bash
-./run_tests.sh          # 一次跑完 6 个套件，共 263 项检查
+./run_tests.sh          # 一次跑完 6 个套件，共 264 项检查
 ```
 
 明细（也可以单独跑）：
@@ -37,7 +37,7 @@ cd backend && python3 test_delivery.py       # 41 项：地址解析（Google �
 cd backend && node test-order-page.js        # 38 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
 cd docs    && node test-wxmenu.js            # 23 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
 cd docs    && node test-order-page-static.js # 37 项：点单页（站点首页）—— 后端用桩，不依赖线上地址服务，结果确定
-cd worker  && node test_worker.mjs           # 76 项：Worker 全链路（真实 SQL + 真实地址/路线 + App 发布菜单/下单校验）
+cd worker  && node test_worker.mjs           # 77 项：Worker 全链路（真实 SQL + 真实地址/路线 + App 发布菜单/下单校验）
 ```
 
 `worker/test_worker.mjs` 说明：这台开发机是 PRoot/Termux 类环境，`wrangler dev` 起不来（workerd 需要 1GB 对齐内存，PRoot 给不了）。所以测试用 Node 内建 `node:sqlite` 冒充 D1，直接调用 Worker 的 `fetch` 处理器 —— 测的是**同一份 Worker 代码**，不是复刻。
