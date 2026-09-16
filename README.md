@@ -3,7 +3,7 @@
 不经过微信公众号的普通点单网站：顾客户端下单 → 云端排队 → 店里安卓设备拉单 → 蓝牙热敏打印机出票 → 本地记账/对账。
 
 ```
-顾客手机 ──> docs/（静态站，Cloudflare/GitHub Pages，浏览器内算里程）
+顾客手机 ──> docs/（静态站，Cloudflare/GitHub Pages，只收集地址/显示金额）
                 │ POST /api/order
                 ▼
           worker/（Cloudflare Worker + D1，免费档，不休眠）
@@ -16,7 +16,7 @@
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
-| `docs/` | 顾客看的点单网页（纯静态，可直连 Worker 或本地后端）。地址补全、里程、配送费、税、小费全在浏览器算 | 打开 `docs/index.html`，或推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs` |
+| `docs/` | 顾客看的点单网页（纯静态）。**只负责收集地址、显示金额**：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key | 打开 `docs/index.html`，或推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs` |
 | `worker/` | **线上后端**：下单/取单/回写/日报汇总。Cloudflare Worker + D1，免费档 10 万请求/天 | 见 `worker/README.md`（4 条 wrangler 命令） |
 | `backend/` | 本地参考后端（Python 标准库零依赖）：同一套业务逻辑，方便没网/没账号时跑通全流程，也能当自托管方案 | `cd backend && sh run.sh 8899` → http://127.0.0.1:8899/order |
 
@@ -25,32 +25,36 @@
 ## 跑测试（全部无需密钥，但需要联网调纽约官方地址/路线接口）
 
 ```bash
-./run_tests.sh          # 一次跑完 7 个套件，共 245 项检查
+./run_tests.sh          # 一次跑完 6 个套件，共 220 项检查
 ```
 
 明细（也可以单独跑）：
 
 ```bash
 cd backend && python3 selftest.py            # 48 项：签名/菜单规则/小票/ESC-POS 字节/HTTP 全链路/打印队列
-cd backend && python3 test_delivery.py       # 39 项：真调 NYC GeoSearch + OSRM，里程/配送费/税/小费/自取
+cd backend && python3 test_delivery.py       # 41 项：地址解析（Google 优先）+ OSRM 里程/配送费/税/小费/自取/五区范围
 cd backend && node test-order-page.js        # 38 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
 cd docs    && node test-wxmenu.js            # 23 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
-cd docs    && node test-delivery.js          # 31 项：前端里程模块（与后端公式对齐）
-cd docs    && node test-order-page-static.js # 20 项：Pages 版点单页（浏览器内算里程）
-cd worker  && node test_worker.mjs           # 46 项：Worker 全链路（真实 SQL + 真实地址/路线）
+cd docs    && node test-order-page-static.js # 20 项：Pages 版点单页 —— 后端用桩，不依赖线上地址服务，结果确定
+cd worker  && node test_worker.mjs           # 50 项：Worker 全链路（真实 SQL + 真实地址/路线）
 ```
 
 `worker/test_worker.mjs` 说明：这台开发机是 PRoot/Termux 类环境，`wrangler dev` 起不来（workerd 需要 1GB 对齐内存，PRoot 给不了）。所以测试用 Node 内建 `node:sqlite` 冒充 D1，直接调用 Worker 的 `fetch` 处理器 —— 测的是**同一份 Worker 代码**，不是复刻。
 
 ## 关键业务规则（改店的时候先看这里）
 
-配送费阶梯默认为：≤0.5 英里免 · ≤2 英里 $3 · ≤4 英里 $6 · ≤6 英里 $10 · 超出每英里 $2.5 · 最远 8 英里 · 起送 $20 · 纽约市销售税 8.875%。
+配送费默认为：**5 英里内免费 · 超出每英里 $2（不足 1 英里按 1 英里算，即 5~6 英里 $2、6~7 英里 $4，类推）· 不设距离上限 · 起送 $20 · 纽约市销售税 8.875%**。
+
+**只送纽约五大区**（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）：解析结果不在五区内直接拒单，别让顾客下完单才发现送不了。
 
 - 顾客**目前只收现金**（送到付）。不收卡 → 不碰支付网关/PCI，HTTPS 证书用 Let's Encrypt/Cloudflare 免费。
 - **金额一律服务端重算**，前端传来的 subtotal/total 直接忽略（测试里专门放了一单假金额验证）。
 - 现货地址解析的四个坑（都踩过）：不写 ZIP 会把 `40 Bayard St` 解析到布鲁克林；`focus.point` 压不住这种歧义；**纯中文地址搜不到**（必须英文街名）；只给 ZIP 会被当街名。所以前端强制「门牌号 + 英文街名」，并给候选列表让顾客点选。
 - 钱用 Decimal / ROUND_HALF_UP（浮点会把 `12×8.875%` 算成 1.06）。
 - 路线服务挂掉时不堵单：按直线×1.35 估算 + 兜底配送费，订单标 `needs_manual_review` 留人工核对。
+- 地址解析优先 Google（每月 10,000 次免费），其次 NYC 官方 GeoSearch，最后 Nominatim。免费源都解不了 Queens 那种 `10-53 116th St` 连字符门牌号，Google 才行。
+- **Google 会把瞎编地址脑补成附近的真街道**（实测 `9999 Nowhere Blvd, New York, NY 10013` → `40 Lispenard St`，带 `partial_match: true`），放过去等于让骑手送错地址，所以只采信 `partial_match` 为假的结果。
+- 免费源要带 User-Agent：Nominatim / OSRM 对空 UA 直接 403（伪装成 JSON 解析失败），而且会限流（429）。
 - 小票上地址要按词换行（`STREET` 被切成 `ST`/`REET` 送餐员会送错）；配送费即使 $0 也要打出来。
 
 ## 打印机（店里那台 Star TSP143IIIBi）
