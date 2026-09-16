@@ -92,7 +92,11 @@ export async function geocode(query) {
 
 export async function routeMiles(a, b) {
   try {
-    const r = await fetch(`${OSRM}/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`);
+    // 必须带 User-Agent：OSRM 前面是 nginx，空 UA 直接 403 返回 HTML
+    // （2026-09-16 线上路线全挂就是这个原因，错误信息还被伪装成 JSON 解析失败）
+    const r = await fetch(`${OSRM}/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`,
+      { headers: { "User-Agent": UA } });
+    if (!r.ok) return { ok: false, error: `路线服务返回 ${r.status}`, miles: null, minutes: null, source: "unavailable" };
     const d = await r.json();
     const route = (d.routes || [])[0] || {};
     return { ok: true, miles: Math.round(((route.distance || 0) / M_PER_MILE) * 100) / 100,

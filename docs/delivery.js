@@ -103,7 +103,10 @@
 
   async function routeMiles(a, b) {
     try {
-      const r = await fetch(`${OSRM}/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`);
+      // 同样要带 UA：空 UA 会被 OSRM 前置的 nginx 挡成 403 HTML
+      const r = await fetch(`${OSRM}/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false&steps=false`,
+        { headers: { 'User-Agent': UA } });
+      if (!r.ok) return { ok: false, error: '路线服务返回 ' + r.status, miles: null, minutes: null, source: 'unavailable' };
       const d = await r.json();
       const route = (d.routes || [])[0] || {};
       return { ok: true, miles: milesOf(route.distance || 0), minutes: Math.round((route.duration || 0) / 60), source: 'osrm' };
