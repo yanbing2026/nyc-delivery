@@ -103,10 +103,22 @@ globalThis.fetch = async (u) => {
   await sleep(50);
   check('店址与规则来自后端', els['shopHint'].innerHTML.includes('10-53 116th St') && els['shopHint'].innerHTML.includes('免费'),
     els['shopHint'].innerHTML);
+  // 顾客不该看到店址和配送费规则 —— 那是店里配置，只藏在店员面板里（默认隐藏）
+  check('顾客默认看不到店址/配送费规则（店员面板隐藏）', els['devBox'].style.display === 'none', els['devBox'].style.display);
+  check('页头也不出现内部话术', !/服务器计算|后端|菜单编辑页/.test(els['shopLine'].textContent),
+    els['shopLine'].textContent);
   check('起送价显示在后端信息里', els['shopLine'].textContent.includes('起送'), els['shopLine'].textContent);
+  // 调试开关：地址栏 ?debug=1 或 localStorage 里 wxmenu_debug=1 时才显示
+  localStorage.setItem('wxmenu_debug', '1');
+  await T.reloadConfig();
+  check('调试开关打开后店员面板可见', els['devBox'].style.display === '', JSON.stringify(els['devBox'].style.display));
+  localStorage.setItem('wxmenu_debug', '0');
+  await T.reloadConfig();
+  check('关掉调试开关后店员面板再次隐藏', els['devBox'].style.display === 'none', els['devBox'].style.display);
   check('菜单渲染', (els['menu'].children || []).length >= 8, (els['menu'].children || []).length);
-  check('启动没有发任何"本地解析地址"的请求（只问了 /api/config）',
-    calls.length === 1 && calls[0].includes('/api/config'), calls);
+  // 只看"有没有本地解析地址的请求"，不看次数（下面还会故意多读几次配置）
+  check('启动阶段只问了 /api/config（没有任何"本地解析地址"的请求）',
+    calls.length >= 1 && calls.every((c) => c.includes('/api/config')), calls);
 
   console.log('== 2. 选菜 → 向后端要报价 ==');
   els['menu'].children[1].querySelector('.plus').onclick();

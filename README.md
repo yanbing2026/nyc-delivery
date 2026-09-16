@@ -25,7 +25,7 @@
 ## 跑测试（全部无需密钥，但需要联网调纽约官方地址/路线接口）
 
 ```bash
-./run_tests.sh          # 一次跑完 6 个套件，共 228 项检查
+./run_tests.sh          # 一次跑完 6 个套件，共 232 项检查
 ```
 
 明细（也可以单独跑）：
@@ -35,7 +35,7 @@ cd backend && python3 selftest.py            # 48 项：签名/菜单规则/小�
 cd backend && python3 test_delivery.py       # 41 项：地址解析（Google 优先）+ OSRM 里程/配送费/税/小费/自取/五区范围
 cd backend && node test-order-page.js        # 38 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
 cd docs    && node test-wxmenu.js            # 23 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
-cd docs    && node test-order-page-static.js # 28 项：Pages 版点单页 —— 后端用桩，不依赖线上地址服务，结果确定
+cd docs    && node test-order-page-static.js # 32 项：Pages 版点单页 —— 后端用桩，不依赖线上地址服务，结果确定
 cd worker  && node test_worker.mjs           # 50 项：Worker 全链路（真实 SQL + 真实地址/路线）
 ```
 
