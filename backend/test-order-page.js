@@ -45,8 +45,16 @@ globalThis.prompt = () => '25';
 globalThis.location = { reload() { globalThis.__reloaded = true; }, origin: BASE, pathname: '/order.html' };
 globalThis.alert = (m) => { globalThis.__lastAlert = m; };
 // 页面里用的是相对路径 fetch('/api/...')，浏览器能懂，Node 要补上主机
+// 同时记在飞请求数：收尾要等它们落地，否则关掉后端时未完成的请求会 reject
+// （这些请求是页面「发了不管」的，Node 视作未捕获异常直接崩）
+let inflight = 0;
 const __realFetch = globalThis.fetch;
-globalThis.fetch = (u, o) => __realFetch(String(u).startsWith('http') ? u : BASE + u, o);
+globalThis.fetch = (u, o) => {
+  inflight++;
+  const p = __realFetch(String(u).startsWith('http') ? u : BASE + u, o);
+  p.then(() => { inflight--; }, () => { inflight--; });
+  return p;
+};
 
 /* ---------------- 起后端 ---------------- */
 async function up() {
@@ -168,10 +176,20 @@ async function up() {
     await T.refresh();
     check('提示要用英文街名', els['msgs'].innerHTML.includes('英文街名'), els['msgs'].innerHTML.slice(0, 120));
   } finally {
+    // 收尾顺序要固定，否则一次「全部通过」的测试会以退出码 1 结束：
+    // 页面里最后那个 debounce(lookup) 是发了不管的，后端一关，还在飞的
+    // autocomplete 请求就 reject，Node 把未捕获的 rejection 当致命错误。
+    // ① 先取消还没触发的定时器（不然关完后端它还会再发一次）
+    const t = globalThis.__T;
+    if (t && t.acTimer) clearTimeout(t.acTimer);
+    // ② 等在飞的请求自己落地（真调纽约接口，通常 1~2 秒；最多 15 秒）
+    for (let i = 0; i < 75 && inflight > 0; i++) await sleep(200);
+    // ③ 再关后端
     if (proc) proc.kill();
   }
 
   console.log();
   if (fails) { console.log('❌ ' + fails + ' 项失败'); process.exit(1); }
   console.log('✅ 点单页（真后端 + 真里程）全部通过');
+  process.exit(0);  // 显式退出：别让残留的定时器/句柄改变退出码
 })();
