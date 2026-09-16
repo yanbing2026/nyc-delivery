@@ -112,7 +112,8 @@ def geocode_candidates(query: str, limit: int = 5) -> list[dict]:
             return cands[:limit]
     except Exception:
         pass
-    # 兜底：Nominatim（服务端可以调；浏览器直连没有 CORS，所以只在后端用）
+    # 兜底：Nominatim（实测返回 access-control-allow-origin: *，浏览器也能直连。
+    # 注意必须带 User-Agent：空 UA 会被 Nominatim 直接 403）
     try:
         data = _get(NOMINATIM, {"q": query, "format": "json", "limit": limit,
                                 "countrycodes": "us", "addressdetails": 1})
