@@ -128,9 +128,11 @@
       if (m <= tier.max) return { ok: true, miles: m, fee: tier.fee, tier: `${tier.max} 英里内 $${tier.fee.toFixed(2)}` };
     }
     const last = t.slice().sort((a, b) => b.max - a.max)[0] || { max: cfg.free_miles, fee: 0 };
-    const extra = Math.max(0, m - last.max) * cfg.per_mile_beyond;
+    // 超出部分按整英里向上取整（与 Worker 侧同一套）
+    const over = Math.max(0, m - last.max);
+    const extra = Math.ceil(over) * cfg.per_mile_beyond;
     return { ok: true, miles: m, fee: money(last.fee + extra),
-      tier: `${last.max} 英里 $${last.fee.toFixed(2)} + 超出 ${(m - last.max).toFixed(1)} 英里 × $${cfg.per_mile_beyond}/英里` };
+      tier: `${last.max} 英里 $${last.fee.toFixed(2)} + 超出 ${Math.ceil(over)} 英里 × $${cfg.per_mile_beyond}/英里` };
   }
 
   async function quote(restaurant, addrQuery, subtotal, cfg, tipRate, pickup) {
@@ -141,7 +143,10 @@
     } else {
       const [ok, warn] = looksLikeAddress(addrQuery);
       if (!ok) return Object.assign({ ok: false, error: warn }, out);
-      const g = await geocode(addrQuery);
+      // 地址解析抛异常（服务挂了/403/超时）不该让页面崩：转成结构化失败返回
+      let g;
+      try { g = await geocode(addrQuery); }
+      catch (e) { return Object.assign({ ok: false, error: '地址解析失败：' + (e.message || e) }, out); }
       if (!g.ok) return Object.assign(g, out);
       out.address = { input: addrQuery, matched: g.label, borough: g.borough, zip: g.postalcode, lat: g.lat, lon: g.lon, source: g.source };
       if (g.warning) out.address.warning = g.warning;

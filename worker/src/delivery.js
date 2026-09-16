@@ -148,9 +148,11 @@ export function deliveryFee(miles, cfg = {}) {
   for (const tier of t.slice().sort((a, b) => a.max - b.max))
     if (m <= tier.max) return { ok: true, miles: m, fee: tier.fee, tier: `${tier.max} 英里内 $${tier.fee.toFixed(2)}` };
   const last = t.slice().sort((a, b) => b.max - a.max)[0] || { max: cfg.free_miles, fee: 0 };
-  const extra = Math.max(0, m - last.max) * cfg.per_mile_beyond;
+  // 超出部分按整英里向上取整：5~6 英里 $2、6~7 英里 $4、7~8 英里 $6 …… 不足 1 英里算 1 英里
+  const over = Math.max(0, m - last.max);
+  const extra = Math.ceil(over) * cfg.per_mile_beyond;
   return { ok: true, miles: m, fee: money(last.fee + extra),
-    tier: `${last.max} 英里 $${last.fee.toFixed(2)} + 超出 ${(m - last.max).toFixed(1)} 英里 × $${cfg.per_mile_beyond}/英里` };
+    tier: `${last.max} 英里 $${last.fee.toFixed(2)} + 超出 ${Math.ceil(over)} 英里 × $${cfg.per_mile_beyond}/英里` };
 }
 
 export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate = 0, pickup = false, gkey = "") {
@@ -161,7 +163,10 @@ export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate =
   } else {
     const [ok, warn] = looksLikeAddress(addrQuery);
     if (!ok) return { ok: false, error: warn, ...out };
-    const g = await geocode(addrQuery, gkey);
+    // 地址解析抛异常（服务挂了/403/超时）不该把整单打成 500：转成结构化失败返回
+    let g;
+    try { g = await geocode(addrQuery, gkey); }
+    catch (e) { return { ok: false, error: "地址解析失败：" + (e.message || e), ...out }; }
     if (!g.ok) return { ...g, ...out };
     out.address = { input: addrQuery, matched: g.label, borough: g.borough, zip: g.postalcode,
       lat: g.lat, lon: g.lon, source: g.source };

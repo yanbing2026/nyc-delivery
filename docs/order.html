@@ -69,9 +69,9 @@ summary{font-size:14px;color:var(--dim)}
 <details>
   <summary>⚙️ 设置（店址 / 配送费规则）—— 这是演示页，改成你自己的</summary>
   <label>店址（用来算里程的起点）</label>
-  <input id="shop_addr" oninput="saveShopAddr()" value="40 Bayard St, New York, NY 10013">
+  <input id="shop_addr" oninput="saveShopAddr()" value="10-53 116th St, Flushing, NY 11356">
   <div class="hint" id="shopHint">解析中…</div>
-  <div class="hint">配送费规则：≤0.5 英里免 · ≤2 英里 $3 · ≤4 英里 $6 · ≤6 英里 $10 · 超出每英里 $2.5 · 最远 8 英里 · 起送 $20 · 纽约税 8.875%</div>
+  <div class="hint">配送费规则：5 英里内免费 · 超出每英里 $2（不足 1 英里按 1 英里算）· 起送 $20 · 纽约税 8.875%</div>
 </details>
 
 <div class="block">
@@ -131,7 +131,7 @@ const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
 
 async function boot(){
   $('shopName').textContent=SHOP.name;
-  $('shopLine').textContent=`${SHOP.phone} · 最远 ${D.max_miles} 英里 · 起送 ${money(D.min_order)} · 现金支付`;
+  $('shopLine').textContent=`${SHOP.phone}${D.max_miles>0?` · 最远 ${D.max_miles} 英里`:''} · 起送 ${money(D.min_order)} · 现金支付`;
   $('shop_addr').value=localStorage.getItem('wxmenu_shop_addr')||D.restaurant_addr;
   renderTips();renderMenu();await resolveRest();
   if(backend) $('shopLine').textContent += ' · 已连后端（下单会真发到店里）';
@@ -165,9 +165,15 @@ const items=()=>{const o=[];MENU.forEach(g=>g.items.forEach(it=>{const q=cart[it
 async function resolveRest(){
   const a=$('shop_addr').value.trim();
   localStorage.setItem('wxmenu_shop_addr',a);
-  const r=await DL.geocode(a);
+  const r=await DL.geocode(a).catch(e=>({ok:false,error:e.message||String(e)}));
   if(r.ok){ rest={lat:r.lat,lon:r.lon}; $('shopHint').innerHTML=`✓ 起点已定位：${r.label} (${r.borough||''} ${r.postalcode||''})`; }
-  else { rest=null; $('shopHint').innerHTML='✗ 店址解析失败：'+r.error; }
+  else {
+    // 免费地址服务解不了这个地址（比如 Queens 那种 10-53 连字符门牌号）时，
+    // 退回页面内置的店坐标继续算——店址坐标本来就随配置下发，不该因此把整页卡死
+    rest={lat:D.restaurant.lat,lon:D.restaurant.lon};
+    $('shopHint').innerHTML=`⚠ 店址解析失败（${r.error}），已用内置坐标 ${D.restaurant.lat.toFixed(4)},${D.restaurant.lon.toFixed(4)}`
+      +(a===D.restaurant_addr?'':'（你填的地址与内置的不一致，里程可能有偏差）');
+  }
   refresh();
 }
 function onAddr(){ clearTimeout(acTimer); acTimer=setTimeout(lookup,350); refresh(); }
