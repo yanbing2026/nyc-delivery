@@ -29,7 +29,9 @@ const D1 = {
     return api;
   },
 };
-const env = { DB: D1, AGENT_KEY: "test-key" };
+// GOOGLE_MAPS_API_KEY 从环境拿：有就实测 Google 解析，没有就自动跳过那几项断言，
+// 这样别人克隆下来不配 key 也能跑满（run_tests.sh 会从当前 profile 的 .env 里取）
+const env = { DB: D1, AGENT_KEY: "test-key", GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY || "" };
 
 const call = async (path, { method = "GET", body, headers = {} } = {}) => {
   const req = new Request("https://api.example.com" + path, {
@@ -50,6 +52,9 @@ const MENU = [{ name: "海蛎煎", qty: 2, price: 12.95 }, { name: "白米饭", 
 // 官方给 0.84 英里→$3，Nominatim 给 0.50 英里→免费档 $0）。
 const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const expectFee = (miles, cfg = W.DEFAULT_DELIVERY) => W.deliveryFee(miles, cfg).fee;
+// 报价响应里里程在 distance.miles（订单对象上才叫 distance_miles）——写错字段会静默比到
+// undefined，再变成 0 英里免费档，刚好撞上 fee=0 就"通过"了（踩过）
+const quoteMiles = (q) => (q.distance || {}).miles;
 
 console.log("== 1. 基础接口 ==");
 check("GET /api/health", (await call("/api/health")).data.ok);
@@ -61,7 +66,7 @@ console.log("== 2. 地址与报价（真调 GeoSearch + OSRM） ==");
 const q1 = (await call("/api/quote?address=" + encodeURIComponent("1 Pike St, New York, NY 10002") + "&subtotal=27.9&tip_rate=0.18")).data;
 check("报价成功", q1.ok, q1.error);
 check("解析到 10002", q1.address && q1.address.zip === "10002", q1.address);
-check("配送费跟里程档位一致（不写死坐标）", q1.delivery_fee === expectFee(q1.distance_miles), [q1.distance_miles, q1.delivery_fee]);
+check("配送费跟里程档位一致（不写死坐标）", q1.delivery_fee === expectFee(quoteMiles(q1)), [quoteMiles(q1), q1.delivery_fee]);
 check("税 = 27.9 × 8.875% = 2.48", q1.tax === 2.48, q1.tax);
 check("小费 = 5.02", q1.tip === 5.02, q1.tip);
 check("合计 = 小计 + 税 + 小费 + 配送费", q1.total === round2(q1.subtotal + q1.tax + q1.tip + q1.delivery_fee),
@@ -85,10 +90,25 @@ console.log("== 2b. NYC 官方地址服务 503 时必须走 Nominatim 兜底 =="
     const q = (await call("/api/quote?address=" + encodeURIComponent("1 Pike St, New York, NY 10002") + "&subtotal=27.9&tip_rate=0.18")).data;
     check("官方 503 时 Worker 仍能报价", q.ok === true, q.error);
     check("兜底报价的配送费跟里程对得上",
-      q.ok && q.delivery_fee === W.deliveryFee(q.distance_miles, W.DEFAULT_DELIVERY).fee, [q.distance_miles, q.delivery_fee]);
+      q.ok && q.delivery_fee === expectFee(quoteMiles(q)), [quoteMiles(q), q.delivery_fee]);
     const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "1 Pike St, New York, NY 10002", 27.9, S.DEFAULT_DELIVERY, 0.18);
-    check("前端版同样能兜底，且两边算出来一样",
-      sq.ok === true && sq.delivery_fee === q.delivery_fee && sq.total === q.total, [sq.delivery_fee, q.delivery_fee, sq.total, q.total]);
+    check("前端版同样能兜底（金额自洽）",
+      sq.ok === true && sq.total === round2(sq.subtotal + sq.tax + sq.tip + sq.delivery_fee), sq);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+console.log("== 2c. Google 和官方都打挂 → 仍然要能报价（最后一道 Nominatim） ==");
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (u, o) => /geosearch\.planninglabs\.nyc|maps\.googleapis\.com/.test(String(u))
+    ? Promise.resolve(new Response("503", { status: 503 }))
+    : realFetch(u, o);
+  try {
+    const q = (await call("/api/quote?address=" + encodeURIComponent("1 Pike St, New York, NY 10002") + "&subtotal=27.9&tip_rate=0.18")).data;
+    check("三档地址源全挂时仍能报价", q.ok === true, q.error);
+    check("兜底配送费仍与里程对得上", q.ok && q.delivery_fee === expectFee(quoteMiles(q)), [quoteMiles(q), q.delivery_fee]);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -100,8 +120,12 @@ check("配送费阶梯两边完全一致",
   feeCases.every((m) => S.deliveryFee(m, S.DEFAULT_DELIVERY).fee === W.deliveryFee(m, W.DEFAULT_DELIVERY).fee));
 check("9.5 英里两边都拒", S.deliveryFee(9.5, S.DEFAULT_DELIVERY).ok === false && W.deliveryFee(9.5, W.DEFAULT_DELIVERY).ok === false);
 const sq = await S.quote(S.DEFAULT_DELIVERY.restaurant, "1 Pike St, New York, NY 10002", 27.9, S.DEFAULT_DELIVERY, 0.18);
-check("同一地址两边税/费/合计一致",
-  sq.tax === q1.tax && sq.delivery_fee === q1.delivery_fee && sq.total === q1.total, [sq.total, q1.total]);
+// Worker 与前端以后可能用不同的地址服务（Worker 换成 Google 之后，同一个地址
+// 解析出的里程就会差一个档），所以这里只对拍与地址无关的部分 + 各自的金额自洽；
+// 配送费函数本身的一致性由上面 feeCases 那条逐档对拍保证。
+check("同一地址两边税/小费一致（配送费由各自地址服务决定）",
+  sq.tax === q1.tax && sq.tip === q1.tip, [sq.tax, q1.tax, sq.tip, q1.tip]);
+check("前端版金额自洽", sq.total === round2(sq.subtotal + sq.tax + sq.tip + sq.delivery_fee), sq);
 
 console.log("== 4. 下单（金额服务端重算） ==");
 const bad = await call("/api/order", { method: "POST", body: { items: MENU } });
