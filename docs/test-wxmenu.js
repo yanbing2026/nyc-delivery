@@ -35,6 +35,22 @@ check('每行不超过 32 半角宽', text.split('\n').every((l) => W.dw(l) <= 3
   text.split('\n').filter((l) => W.dw(l) > 32).join(' / '));
 check('合计 64.00', text.includes('64.00'));
 const fsx = require('fs');
+// 基准文件是 Python 渲染的真身，由 backend/make_receipt_fixtures.py 生成。
+// 以前只在原来那台机器的 /tmp 里留了一份，换台机器（或清过 /tmp）就直接
+// ENOENT —— README 说的「可以单独跑」其实不成立，所以这里按需自己生成。
+const FIXTURES = ['/tmp/py_receipt.txt', '/tmp/py_receipt_delivery.txt'];
+if (!FIXTURES.every((f) => fsx.existsSync(f))) {
+  const { execFileSync } = require('child_process');
+  const backendDir = require('path').join(__dirname, '..', 'backend');
+  try {
+    execFileSync('python3', ['make_receipt_fixtures.py'], { cwd: backendDir, stdio: 'pipe' });
+    console.log('  （基准文件不存在，已用 backend/make_receipt_fixtures.py 生成）');
+  } catch (e) {
+    console.log('  ✗ 生成基准文件失败（需要 python3）：' + e.message);
+    console.log('    手动跑：cd backend && python3 make_receipt_fixtures.py');
+    process.exit(1);
+  }
+}
 check('老式微信单：与 Python 逐字符一致',
   text === fsx.readFileSync('/tmp/py_receipt.txt', 'utf8').replace(/\n$/, ''), '见 /tmp/py_receipt.txt');
 
