@@ -76,6 +76,9 @@ check("合计 = 小计 + 税 + 小费 + 配送费", q1.total === round2(q1.subto
 const q2 = (await call("/api/quote?address=" + encodeURIComponent("40 Bayard St, New York, NY 10013") + "&subtotal=27.9")).data;
 check("曼哈顿 13.9 英里 → 不设上限，按超出里程计费",
   q2.ok === true && q2.delivery_fee === expectFee(quoteMiles(q2)), [quoteMiles(q2), q2.delivery_fee]);
+const qNJ = (await call("/api/quote?address=" + encodeURIComponent("1 Journal Square, Jersey City, NJ 07306") + "&subtotal=27.9")).data;
+check("五区外（新泽西）→ 拒单并说明只送纽约五大区",
+  qNJ.ok === false && /只送纽约五大区/.test(qNJ.error || ""), qNJ.error);
 const q3 = (await call("/api/quote?subtotal=27.9&pickup=1")).data;
 check("自取免配送费 30.38", q3.ok && q3.delivery_fee === 0 && q3.total === 30.38, q3);
 const ac = (await call("/api/autocomplete?q=" + encodeURIComponent("100 Mott St"))).data;

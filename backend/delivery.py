@@ -44,6 +44,16 @@ class GeoError(Exception):
     pass
 
 
+# 只送纽约五大区（与 Worker 侧同一套判定）
+NYC_BOROUGHS = {"Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"}
+NYC_COUNTIES = {"New York County", "Kings County", "Queens County", "Bronx County", "Richmond County"}
+
+
+def in_nyc(g: dict) -> bool:
+    return str((g or {}).get("borough") or "").strip() in NYC_BOROUGHS or \
+        str((g or {}).get("county") or "").strip() in NYC_COUNTIES
+
+
 def _get(url: str, params: dict, timeout: int = 12) -> dict:
     q = urllib.parse.urlencode(params)
     key = url + "?" + q
@@ -138,6 +148,7 @@ def geocode_candidates(query: str, limit: int = 5) -> list[dict]:
                     if isinstance(loc.get("lat"), (int, float)) and isinstance(loc.get("lng"), (int, float)):
                         out.append({"label": r.get("formatted_address", ""), "name": "",
                                     "borough": b.get("long_name", ""),
+                                    "county": (comp.get("administrative_area_level_2") or {}).get("long_name", ""),
                                     "postalcode": pc.get("short_name", ""),
                                     "lat": loc["lat"], "lon": loc["lng"], "source": "google"})
                 if out:
@@ -161,6 +172,7 @@ def geocode_candidates(query: str, limit: int = 5) -> list[dict]:
             addr = d.get("address") or {}
             out.append({"label": d.get("display_name", ""), "name": d.get("name", ""),
                         "borough": addr.get("suburb") or addr.get("city") or "",
+                        "county": addr.get("county", ""),
                         "postalcode": addr.get("postcode", ""),
                         "lat": float(d["lat"]), "lon": float(d["lon"]), "source": "nominatim"})
         return out[:limit]
@@ -268,6 +280,11 @@ def quote(restaurant: dict, addr_query: str, subtotal: float, cfg: dict,
         g = geocode(addr_query)
         if not g.get("ok"):
             return {**g, **out}
+        # 只送纽约五大区：出了五区（新泽西/长岛/上州…）直接拒绝
+        if not in_nyc(g):
+            return {"ok": False,
+                    "error": "只送纽约五大区（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）——这个地址不在服务范围内",
+                    **out}
         out["address"] = {"input": addr_query, "matched": g["label"],
                           "borough": g.get("borough"), "zip": g.get("postalcode"),
                           "lat": g["lat"], "lon": g["lon"], "source": g["source"]}

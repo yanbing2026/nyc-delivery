@@ -90,6 +90,10 @@ q2 = D.quote(REST, FAR, 42.0, dict(CFG, max_miles=8))
 check("配上 8 英里上限时，唐人街 13+ 英里被拒",
       q2.get("ok") is False and "超出配送范围" in q2["error"], q2.get("error"))
 
+qnj = D.quote(REST, "1 Journal Square, Jersey City, NJ 07306", 42.0, CFG)
+check("五区外（新泽西）→ 拒单并说明只送纽约五大区",
+      qnj.get("ok") is False and "只送纽约五大区" in qnj.get("error", ""), qnj.get("error"))
+
 q3 = D.quote(REST, NEAR, 12.0, CFG)
 check("未到起送价 $20 被拦", q3.get("ok") is False and "起送" in q3["error"], q3.get("error"))
 

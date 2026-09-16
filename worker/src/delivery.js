@@ -6,6 +6,16 @@ const GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json";
 const GOOGLE_TIMEOUT_MS = 4000;   // 地址解析是下单必经之路，卡住就等于不接单
 const OSRM = "https://router.project-osrm.org/route/v1/driving";
 const M_PER_MILE = 1609.344;
+
+// 只送纽约五大区。Google 的 borough 落在 sublocality_level_1，免费源则可能给 suburb/city；
+// 再加一层县名兜底（行政区域在 Google 里是 administrative_area_level_2）。
+export const NYC_BOROUGHS = ["Manhattan", "Brooklyn", "Queens", "Bronx", "Staten Island"];
+const NYC_COUNTIES = ["New York County", "Kings County", "Queens County", "Bronx County", "Richmond County"];
+export function inNyc(g) {
+  const b = String((g && g.borough) || "").trim();
+  const c = String((g && g.county) || "").trim();
+  return NYC_BOROUGHS.includes(b) || NYC_COUNTIES.includes(c);
+}
 const UA = "nyc-delivery-worker/1.0";
 
 export const DEFAULT_DELIVERY = {
@@ -59,10 +69,12 @@ export async function geocodeCandidates(query, limit = 5, gkey = "") {
           const exact = (d.results || []).filter((x) => !x.partial_match);
           const cands = exact.map((x) => {
             const borough = part(x, "sublocality_level_1") || part(x, "sublocality") || part(x, "locality");
+            const county = part(x, "administrative_area_level_2");
             const pc = part(x, "postal_code");
             const loc = (x.geometry || {}).location || {};
             return { label: x.formatted_address || "", name: "",
-              borough: borough ? borough.long_name : "", postalcode: pc ? pc.short_name : "",
+              borough: borough ? borough.long_name : "", county: county ? county.long_name : "",
+              postalcode: pc ? pc.short_name : "",
               lat: loc.lat, lon: loc.lng, source: "google" };
           }).filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lon));
           if (cands.length) return cands.slice(0, size);
@@ -106,6 +118,7 @@ export async function geocodeCandidates(query, limit = 5, gkey = "") {
         label: d.display_name || "",
         name: d.name || "",
         borough: a.suburb || a.city || "",
+        county: a.county || "",
         postalcode: a.postcode || "",
         lat: parseFloat(d.lat), lon: parseFloat(d.lon),
         source: "nominatim",
@@ -172,6 +185,8 @@ export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate =
     try { g = await geocode(addrQuery, gkey); }
     catch (e) { return { ok: false, error: "地址解析失败：" + (e.message || e), ...out }; }
     if (!g.ok) return { ...g, ...out };
+    // 只送纽约五大区：出了五区（新泽西/长岛/上州…）直接拒绝，别让顾客下了单才发现送不了
+    if (!inNyc(g)) return { ok: false, error: `只送纽约五大区（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）——这个地址不在服务范围内`, ...out };
     out.address = { input: addrQuery, matched: g.label, borough: g.borough, zip: g.postalcode,
       lat: g.lat, lon: g.lon, source: g.source };
     if (g.warning) out.address.warning = g.warning;
