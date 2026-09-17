@@ -253,9 +253,9 @@ const pub = (await agent("/api/pos/publish", { method: "POST", body: {
     companyAddress: "10-53 116th St", companyAddress2: "Flushing, NY 11356",
     taxRate: 0.08875, suggestedTips: [0.15, 0.2], paymentMethods: ["Cash"] },
   categories: [{ name: "招牌", ord: 0 }, { name: "饮品", ord: 1 }],
-  items: [{ id: "p1", name: "测试菜一", price: 11.5, category: "招牌", available: 1 },
+  items: [{ id: "p1", name: "测试菜一", price: 11.5, category: "招牌", available: 1, desc: "现点现做，微辣" },
     { id: "p2", name: "测试菜二", price: 6, category: "招牌", available: 0 },
-    { id: "p3", name: "测试饮", price: 3, category: "饮品", available: 1 },
+    { id: "p3", name: "测试饮", price: 3, category: "饮品", available: 1, desc: "凉菜" },
     { id: "p4", name: "没价格的菜", category: "饮品", available: 1 },
     { id: "p5", name: "员工餐", price: 0, category: "招牌", available: 1, publish: 0 }],
 }})).data;
@@ -263,6 +263,28 @@ check("发布成功并回报条数（没价格的被跳过；内部用的也照�
   pub.ok && pub.published.items === 4 && pub.published.categories === 2 && pub.published.skipped === 1,
   pub.published);
 const cfgP = (await call("/api/config")).data;
+// TabPOS 的菜品简介走 items[].desc（App 里字段叫 description）—— 顾客页要能拿到
+{
+  const p1 = cfgP.menu.flatMap((c) => c.items).find((i) => i.id === "p1");
+  check("App 发来的菜品简介存下来并给到顾客页（desc）", !!p1 && p1.desc === "现点现做，微辣", p1);
+  check("没写简介的菜 desc 是空串（不是 undefined，页面拼串不会出 undefined）",
+    cfgP.menu.flatMap((c) => c.items).find((i) => i.id === "p3").desc !== undefined);
+  const long = (await agent("/api/pos/publish", { method: "POST", body: {
+    categories: [{ name: "招牌", ord: 0 }, { name: "饮品", ord: 1 }],
+    items: [{ id: "p1", name: "测试菜一", price: 11.5, category: "招牌", available: 1, desc: "字".repeat(60) },
+      { id: "p3", name: "测试饮", price: 3, category: "饮品", available: 1 },
+      { id: "p5", name: "员工餐", price: 0, category: "招牌", available: 1, publish: 0 }] } })).data;
+  check("简介超长被截到 40 字（App 端的 MENU_DESC_MAX 要跟这个数一致）",
+    long.ok && (await call("/api/config")).data.menu.flatMap((c) => c.items).find((i) => i.id === "p1").desc.length === 40,
+    long.error);
+  // 把 p1 的简介改回短的那条，后面的用例还要用这份菜单
+  await agent("/api/pos/publish", { method: "POST", body: {
+    categories: [{ name: "招牌", ord: 0 }, { name: "饮品", ord: 1 }],
+    items: [{ id: "p1", name: "测试菜一", price: 11.5, category: "招牌", available: 1, desc: "现点现做，微辣" },
+      { id: "p2", name: "测试菜二", price: 6, category: "招牌", available: 0 },
+      { id: "p3", name: "测试饮", price: 3, category: "饮品", available: 1, desc: "凉菜" },
+      { id: "p5", name: "员工餐", price: 0, category: "招牌", available: 1, publish: 0 }] } });
+}
 check("网站菜单按 App 的分类分组、顺序按 App 的 ord",
   cfgP.menu.map((c) => c.name).join(">") === "招牌>饮品", cfgP.menu.map((c) => c.name));
 check("售完的菜不显示给顾客", !cfgP.menu.some((c) => c.items.some((i) => i.id === "p2")), cfgP.menu);

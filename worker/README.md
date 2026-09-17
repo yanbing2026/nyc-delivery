@@ -45,8 +45,12 @@ pending ──取单──> taken ──打印成功──> printed ──送达
 这台机器跑不了 `wrangler dev`（workerd 需要 1GB 对齐内存，PRoot 给不了），所以用 Node 内建 SQLite 冒充 D1，直接调 Worker 的 fetch 处理器，地址/路线走真实 NYC 官方接口：
 
 ```bash
-node test_worker.mjs        # 44 项：接口、金额重算、取单不重复、状态回写、日报对账、限流、CORS
+node test_worker.mjs        # 93 项：接口、金额重算、取单不重复、状态回写、日报对账、限流、CORS
 ```
+
+`/api/pos/publish` 的每条菜（`items[]`）字段：`id / name / price / category / available / publish / desc`。
+其中 `desc` 是菜品简介（顾客页显示在菜名后面，**最多 40 字**，超了截断）—— 安卓端的
+`MENU_DESC_MAX` 必须跟这个数一致，否则店里写的好好的简介会被后端悄悄截掉。
 
 这个测试还会把 Worker 版和前端版（`docs/delivery.js`）的配送费/税/合计逐项对拍，防止两边算不一样。
 
