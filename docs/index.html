@@ -196,15 +196,19 @@ async function reloadConfig(){
     $('navApple').onclick=()=>window.__nav('a');
     $('navGoogle').onclick=()=>window.__nav('g');
     // 内嵌小地图：Leaflet CDN，加载失败就静默跳过（按钮仍可用）
+    // 顺序很重要：先给容器高度再初始化 Leaflet —— 容器高 0 时初始化，
+    // Leaflet 会按错误尺寸渲染，红点跑到屏幕外（2026-09-18 实测）
+    const box=document.getElementById('mapBox');
+    if(box) box.style.cssText='height:180px;border-radius:10px;border:1px solid var(--line);margin-top:8px';
     const ml=document.createElement('link'); ml.rel='stylesheet';
     ml.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(ml);
     const ms=document.createElement('script'); ms.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; ms.async=true;
-    ms.onload=()=>{ if(!geo||!window.L||!document.getElementById('mapBox')) return;
-      const map=L.map('mapBox',{zoomControl:false,attributionControl:false,scrollWheelZoom:false});
+    ms.onload=()=>{ if(!geo||!window.L||!box||!box.getBoundingClientRect) return;
+      const map=L.map(box,{zoomControl:false,attributionControl:false,scrollWheelZoom:false});
       map.setView([geo.lat,geo.lon],15);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
       L.circleMarker([geo.lat,geo.lon],{radius:9,color:'#c8321f',fillColor:'#c8321f',fillOpacity:1}).addTo(map);
-      document.getElementById('mapBox').style.cssText='height:180px;border-radius:10px;border:1px solid var(--line);margin-top:8px';
+      setTimeout(()=>map.invalidateSize(),50);   // 视口异步变化后重算一次，保险
     };
     document.head.appendChild(ms);
     $('shopLine').textContent=[SHOP.slogan,SHOP.phone,`起送 ${money(cfg.min_order)}`,'现金支付 · 到店自取'].filter(Boolean).join(' · ');
