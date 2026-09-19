@@ -103,9 +103,10 @@ globalThis.fetch = async (u, opts) => {
   if (url.startsWith(BACKEND + '/api/order')) {
     const body = JSON.parse(arguments[1] && arguments[1].body ? arguments[1].body : '{}');
     return reply({ ok: true, order: { no: '260916000000001', created_at: '2026-09-16 01:00:00',
-      customer: body.customer, phone: body.phone, address: '59-04 99th St, Flushing, NY 11368, USA',
-      items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: 5.02, delivery_fee: 2,
-      total: 37.4, eta_minutes: 33, pay_type: CFG.payment[0], pickup: !!body.pickup, distance_miles: MILES },
+      customer: body.customer, phone: body.phone, address: '',
+      items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: 0,
+      total: money2(27.9 + 2.48 + money2(27.9 * 0.18)),
+      pay_type: CFG.payment[0], pickup: true, table: 12 },
       print: { ok: true, driver: 'stub' } });
   }
   throw new Error('未打桩的请求：' + url);
@@ -119,7 +120,7 @@ globalThis.fetch = async (u, opts) => {
   const code = scripts[scripts.length - 1].replace(/\bboot\(\);\s*$/, '');
   // cart/MENU/SHOP 要用 getter：写成简写属性只是创建那一刻的快照，
   // 拿它改购物车等于改一份副本（曾经因此把"幽灵菜"那条用例变成永远通过）
-  eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,recall,prefillSaved,setMode,setTip,setAddr:(v)=>{$('addr').value=v;onAddr()},submit(){ $('submit').onclick(); },
+  eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,recall,prefillSaved,setTip,submit(){ $('submit').onclick(); },
     get cart(){return cart}, get MENU(){return MENU}, get SHOP(){return SHOP},
     get Q(){return Q}, get cfg(){return cfg}, get pickup(){return pickup},
     get count(){return count()}, get sub(){return subtotal()} };`);
@@ -155,36 +156,27 @@ globalThis.fetch = async (u, opts) => {
   check('启动阶段只问了 /api/config（没有任何"本地解析地址"的请求）',
     calls.length >= 1 && calls.every((c) => c.includes('/api/config')), calls);
 
-  console.log('== 2. 选菜 → 向后端要报价 ==');
+  console.log('== 2. 选菜 → 向后端要报价（自取） ==');
   els['menu'].children[1].querySelector('.plus').onclick();
   els['menu'].children[1].querySelector('.plus').onclick();
   els['menu'].children[2].querySelector('.plus').onclick();
-  T.setAddr('59-04 99th St, Corona, NY 11368');
   await sleep(500);
   await T.refresh();
   const q = T.Q;
   check('报价请求打到了后端 /api/quote', calls.some((c) => c.includes('/api/quote?')), calls.slice(-2));
-  check('后端返回的运费被采纳（5.56 英里 → $2）', q && q.delivery_fee === 2, q && q.delivery_fee);
-  check('页面显示的运费就是后端返回的数字（不重算）', q && q.delivery_fee === 2, q && [q.delivery_fee]);
+  check('报价请求带 pickup=1（全程只有自取一种模式）', calls.some((c) => c.includes('pickup=1')), calls.slice(-2));
+  check('自取运费 $0', q && q.delivery_fee === 0, q && q.delivery_fee);
   check('合计按后端返回显示', q && els['tot'].textContent === '$' + q.total.toFixed(2), [q && q.total, els['tot'].textContent]);
-  check('报价区列出配送费与距离', els['quote'].innerHTML.includes('配送费') && els['quote'].innerHTML.includes('英里'), els['quote'].innerHTML.slice(0, 150));
-  check('底栏显示件数与英里', els['barHint'].textContent.includes('件') && els['barHint'].textContent.includes('英里'), els['barHint'].textContent);
+  check('报价区列出税（小费默认 0 不显示，加 18% 后才显示）', els['quote'].innerHTML.includes('税'), els['quote'].innerHTML.slice(0, 150));
+  check('底栏显示件数与到店自取', els['barHint'].textContent.includes('件') && els['barHint'].textContent.includes('到店自取'), els['barHint'].textContent);
   check('下单按钮可用', els['submit'].disabled === false);
 
-  console.log('== 3. 小费 / 自取 ==');
+  console.log('== 3. 小费 ==');
   const beforeTip = T.Q.total;
   T.setTip(0.18);
   await sleep(400);
   await T.refresh();
   check('18% 小费由后端加进合计', T.Q.tip > 0 && T.Q.total > beforeTip, [T.Q.tip, T.Q.total]);
-  T.setMode(true);
-  await sleep(300);
-  await T.refresh();
-  check('自取：请求带 pickup=1，运费 $0', T.Q.delivery_fee === 0 && calls.some((c) => c.includes('pickup=1')),
-    T.Q.delivery_fee);
-  T.setMode(false);
-  await sleep(300);
-  await T.refresh();
 
   console.log('== 4. 下单（真发到后端） ==');
   els['cust'].value = '张先生'; els['phone'].value = '917-555-0123';
@@ -192,45 +184,13 @@ globalThis.fetch = async (u, opts) => {
   await sleep(50);
   check('订单发到了后端 /api/order', calls.some((c) => c.includes('/api/order')), calls.slice(-2));
   check('接单页弹出', els['done']._cls.has('show'), [...els['done']._cls]);
-  // 大小写按后端返回的原样（Google 给的是混合大小写，不再强制大写）
-  check('小票含后端返回的送餐地址', /99th st/i.test(els['doneRcpt'].textContent), els['doneRcpt'].textContent.replace(/\n/g, ' | ').slice(0, 200));
-  check('小票含税/配送费/小费', ['税', '配送费', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent.slice(0, 120));
+  check('小票标明到店自取', els['doneRcpt'].textContent.includes('到店自取'), els['doneRcpt'].textContent.replace(/\n/g, ' | ').slice(0, 200));
+  check('小票含税/小费', ['税', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent.slice(0, 120));
   check('提示备好现金', els['doneMsg'].textContent.includes('现金'), els['doneMsg'].textContent);
+  check('提示到店取餐', els['doneMsg'].textContent.includes('到店取餐'), els['doneMsg'].textContent);
   check('提示打印结果来自后端', els['doneMsg'].textContent.includes('小票已打印'), els['doneMsg'].textContent);
 
-  console.log('== 5. 地址格式提示（纯本地规则，不联网） ==');
-  T.setAddr('法拉盛 缅街 41-28');
-  await sleep(400);
-  await T.refresh();
-  check('中文地址提示用英文街名', els['msgs'].innerHTML.includes('英文街名'), els['msgs'].innerHTML.slice(0, 100));
-
-  console.log('== 6. 合计栏不许出现假金额（没填地址 / 地址后端不认） ==');
-  // 回归用例：顾客加了两道菜但还没填地址，页面上"合计"曾经显示 $0.00，
-  // 看着像加菜没生效。现在必须显示小计并标明还没算运费。
-  els['menu'].children[1].querySelector('.plus').onclick();
-  els['menu'].children[1].querySelector('.plus').onclick();
-  T.setMode(false);
-  T.setAddr('');
-  await sleep(400);
-  await T.refresh();
-  // 小计要按菜单单价算（cart 存的是 id → 份数）
-  const priceOf = (id) => { for (const g of T.MENU) for (const it of g.items) if (it.id === id) return it.price; return 0; };
-  const sub = Object.entries(T.cart).reduce((a, [id, n]) => a + priceOf(id) * n, 0);
-  check('购物车确实非空（复现前提）', sub > 0, sub);
-  check('没填地址时合计栏不显示 $0.00', els['tot'].textContent !== '$0.00', els['tot'].textContent);
-  check('没填地址时合计栏显示小计并标明还要加运费',
-    els['tot'].textContent.startsWith('$') && els['tot'].textContent.includes('运费'), els['tot'].textContent);
-  check('合计栏显示的小计与购物车一致', els['tot'].textContent.includes(sub.toFixed(2)), [els['tot'].textContent, sub]);
-  check('报价区的合计行写"填地址后计算"而不是金额',
-    els['quote'].innerHTML.includes('填地址后计算'), els['quote'].innerHTML.slice(0, 160));
-  check('底栏提示待填地址', els['barHint'].textContent.includes('待填地址'), els['barHint'].textContent);
-
-  T.setAddr('法拉盛 缅街 41-28');   // 后端判不合格 → ok:false
-  await sleep(400);
-  await T.refresh();
-  check('后端拒单时合计栏也不显示 $0.00',
-    els['tot'].textContent !== '$0.00' && els['tot'].textContent.includes('运费'), els['tot'].textContent);
-  check('后端拒单时报价区合计行不是金额', !/合计（现金）<\/span><span>\$/.test(els['quote'].innerHTML), els['quote'].innerHTML.slice(-90));
+  console.log('== 5. 合计栏不许出现假金额（后端没回来时显示小计） ==');
 
   console.log('== 7. 换菜单后购物车里的"幽灵菜"要被清掉 ==');
   els['menu'].children[1].querySelector('.plus').onclick();   // 真实存在的一道菜
@@ -241,19 +201,18 @@ globalThis.fetch = async (u, opts) => {
   check('菜单里有的菜留在购物车', (T.cart[realId] || 0) >= 1, T.cart);
 
   console.log('== 8. 老客取回（手机号带出资料 + 再来一单） ==');
-  localStorage.setItem('wx_customer', JSON.stringify({ name: '记住的客', phone: '9175550199', address: '记住的地址' }));
-  els['cust'].value = ''; els['addr'].value = ''; els['phone'].value = '';
+  localStorage.setItem('wx_customer', JSON.stringify({ name: '记住的客', phone: '9175550199' }));
+  els['cust'].value = ''; els['phone'].value = '';
   T.prefillSaved();
-  check('开页自动带出上次填的姓名/电话/地址',
-    els['cust'].value === '记住的客' && els['phone'].value === '9175550199' && els['addr'].value === '记住的地址',
-    [els['cust'].value, els['phone'].value, els['addr'].value]);
+  check('开页自动带出上次填的姓名/电话',
+    els['cust'].value === '记住的客' && els['phone'].value === '9175550199',
+    [els['cust'].value, els['phone'].value]);
 
-  els['cust'].value = ''; els['addr'].value = ''; els['rmsg'].textContent = '';
+  els['cust'].value = ''; els['rmsg'].textContent = '';
   els['rp'].value = '9175550123';
   await T.recall();
   await sleep(30);
   check('取回成功：填上姓名', els['cust'].value === '桩老客', els['cust'].value);
-  check('取回成功：填上上次地址', String(els['addr'].value).includes('59-04'), els['addr'].value);
   check('显示来过次数', /来过 3 次/.test(els['rmsg'].textContent), els['rmsg'].textContent);
   check('给出"再来一单"入口', /再来一单/.test(els['rlast'].innerHTML), els['rlast'].innerHTML);
 

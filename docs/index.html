@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>在线点单 · 纽约送餐</title>
+<title>在线点单 · 到店自取</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--line:#e4e7ec;--fg:#111;--dim:#6b7280;--pri:#c8321f;--ok:#15803d;--warn:#b45309}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -29,9 +29,6 @@ input,textarea{width:100%;min-height:46px;padding:11px;border:1px solid var(--li
 .recall{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0}
 .recall .rh{font-size:13px;color:var(--dim);margin-bottom:6px}
 .recall button{border-radius:10px;border:1px solid var(--line);background:#fff;font-size:15px;font-weight:600;color:var(--fg);min-height:46px}
-.cands{border:1px solid var(--line);border-radius:10px;margin-top:6px;overflow:hidden}
-.cands div{padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px}
-.cands div b{font-size:13px;color:var(--pri)}
 .tips{display:flex;gap:8px;flex-wrap:wrap}
 .tips button{min-height:46px;flex:1;min-width:76px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:15px}
 .tips button.on{background:#111;color:#fff;border-color:#111}
@@ -61,12 +58,8 @@ summary{font-size:14px;color:var(--dim)}
 <body>
 <header>
   <h1 id="shopName">在线点单</h1>
-  <div class="d" id="shopLine">纽约 · 送餐 / 自取 · 现金支付</div>
+  <div class="d" id="shopLine">纽约 · 到店自取 · 现金支付</div>
 </header>
-<div class="seg">
-  <button id="mDelivery" class="on" onclick="setMode(false)">🛵 送餐</button>
-  <button id="mPickup" onclick="setMode(true)">🏬 到店自取</button>
-</div>
 
 <div id="menu"></div>
 
@@ -79,13 +72,7 @@ summary{font-size:14px;color:var(--dim)}
 </details>
 
 <div class="block">
-  <div id="deliveryBox">
-    <label>送餐地址（必须英文，从门牌号开始，带 5 位 ZIP）</label>
-    <input id="addr" placeholder="例：59-04 99th St, Corona, NY 11368" oninput="onAddr()">
-    <div class="hint">只送纽约五大区。地址必须从门牌号开始写成英文（中文地址搜不到），ZIP 要写 —— 同名街道在别的区也有。</div>
-    <div class="cands" id="cands" style="display:none"></div>
-  </div>
-  <!-- 老客取回：输手机号带出上次的姓名/地址（不上验证，见 INSTRUCTIONS 的隐私说明） -->
+  <!-- 老客取回：输手机号带出上次的姓名/电话（不上验证，见 INSTRUCTIONS 的隐私说明） -->
   <div class="recall">
     <div class="rh">老客？输手机号带出上次的资料</div>
     <div style="display:flex;gap:8px">
@@ -99,9 +86,9 @@ summary{font-size:14px;color:var(--dim)}
   <label>姓名</label><input id="cust" placeholder="例：张先生 / Mr. Zhang">
   <label>电话</label><input id="phone" type="tel" placeholder="917-555-0123">
   <label>备注</label><textarea id="remark" rows="2"></textarea>
-  <label>小费（给送餐员）</label><div class="tips" id="tips"></div>
+  <label>小费</label><div class="tips" id="tips"></div>
   <label>支付方式</label>
-  <div class="cash">💵 现金 Cash（送到付）—— 目前只收现金，请备好零钱</div>
+  <div class="cash">💵 现金 Cash（到店付）—— 目前只收现金，请备好零钱</div>
   <div id="msgs"></div>
   <div id="quote"></div>
 </div>
@@ -143,7 +130,7 @@ let MENU=[
 let SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 法拉盛 30 分钟送达'};
 // 运费一律由后端算；默认就指向线上 Worker，本地调试时用 localStorage('wxmenu_backend') 覆盖
 const DEFAULT_BACKEND='https://nyc-delivery-orders.yanbing2004.workers.dev';
-let cart={},pickup=false,tipRate=0,Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
+let cart={},pickup=true,tipRate=0,Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
 // 缺字段一律显示 —（以前 Number(v||0) 会把 undefined 变成 $0.00，
 // 顾客看到"合计 $0.00"会以为页坏了）
 const money=v=>Number.isFinite(+v)?'$'+(+v).toFixed(2):'—';
@@ -184,7 +171,7 @@ async function reloadConfig(){
     }
     $('shopName').textContent=SHOP.name;
     document.title=`${SHOP.name} · 在线点单`;
-    $('shopLine').textContent=[SHOP.slogan,SHOP.phone,`起送 ${money(cfg.min_order)}`,'现金支付'].filter(Boolean).join(' · ');
+    $('shopLine').textContent=[SHOP.slogan,SHOP.phone,`起送 ${money(cfg.min_order)}`,'现金支付 · 到店自取'].filter(Boolean).join(' · ');
     renderTips();
     applyDevVisibility();
     $('shopHint').innerHTML=`✓ 店址：${cfg.restaurant_addr}<br>✓ 规则：${cfg.free_miles} 英里内免费 · 超出每英里 ${money(cfg.per_mile_beyond)}`
@@ -201,8 +188,6 @@ function renderTips(){
     +`<button onclick="setTip(-1)">自定</button>`;
 }
 function setTip(r){ if(r<0){tipRate=Math.min(0.5,Math.max(0,(parseFloat(prompt('小费百分比','20'))||0)/100));}else tipRate=r; renderTips(); refresh(); }
-function setMode(p){ pickup=p; $('mDelivery').classList.toggle('on',!p); $('mPickup').classList.toggle('on',p);
-  $('deliveryBox').style.display=p?'none':'block'; refresh(); }
 function renderMenu(){
   const box=$('menu'); box.innerHTML='';
   MENU.forEach(g=>{
@@ -220,71 +205,45 @@ function renderMenu(){
 }
 const items=()=>{const o=[];MENU.forEach(g=>g.items.forEach(it=>{const q=cart[it.id]||0;if(q)o.push({name:it.name,qty:q,price:it.price})}));return o};
 
-// 店址解析、里程、配送费全部在后端算（页面不再本地计算，也不需要任何 key）
-function onAddr(){ clearTimeout(acTimer); acTimer=setTimeout(lookup,350); refresh(); }
-async function lookup(){
-  const q=$('addr').value.trim();
-  if(q.length<6||!/\d/.test(q)){ $('cands').style.display='none'; return; }
-  if(!backend){ $('cands').style.display='none'; return; }
-  let list=[]; try{ list=await fetch(backend+'/api/autocomplete?q='+encodeURIComponent(q)).then(r=>r.json()).then(d=>d.items||[]); }catch(e){ return; }
-  list=list.filter(c=>c.postalcode);
-  if(!list.length){ $('cands').style.display='none'; return; }
-  $('cands').style.display='block';
-  $('cands').innerHTML=list.map((c,i)=>`<div onclick="pick(${i})"><b>${c.borough||''} ${c.postalcode||''}</b><br>${c.label}</div>`).join('');
-  window.__c=list;
-}
-function pick(i){ $('addr').value=window.__c[i].label.replace(/, USA$/,''); $('cands').style.display='none'; refresh(); }
-
 let qSeq=0;
 async function refresh(){
   const c=count(), sub=subtotal();
   if(!c){ $('quote').innerHTML=''; $('barHint').textContent='还没选菜'; $('submit').disabled=true; $('tot').textContent='$0.00'; return; }
-  // 后端金额没回来之前先显示小计并标明还没算运费 —— 绝不用一个像样的"合计"顶上去
-  $('tot').textContent=money(sub)+(pickup?'':' + 运费');
+  // 自取模式：金额全由后端算（税 + 小费）；没回来之前先显示小计
+  $('tot').textContent=money(sub);
   if(!backend){ msg('err','暂时连不上店里服务器，请稍后再试，或直接打电话订餐。'); $('submit').disabled=true; $('quote').innerHTML=''; return; }
   const seq=++qSeq;
-  const addr=$('addr').value.trim();
   let q;
   try{
-    const u=`${backend}/api/quote?subtotal=${subtotal()}&tip_rate=${Math.max(0,tipRate)}`
-      +(pickup?'&pickup=1':'&address='+encodeURIComponent(addr));
+    const u=`${backend}/api/quote?subtotal=${subtotal()}&tip_rate=${Math.max(0,tipRate)}&pickup=1`;
     q=await fetch(u).then(r=>r.json());
   }catch(e){ q={ok:false,error:'连不上店里服务器，请稍后再试，或直接打电话订餐。'}; }
   if(seq!==qSeq) return;
   Q=q;
-  // 只有后端真的算出合计才显示合计；地址没填/地址不认/连不上后端时显示小计，
-  // 否则合计栏会变成一个假的 $0.00（顾客以为加菜没生效）
-  $('tot').textContent=(q&&q.ok&&Number.isFinite(+q.total))?money(q.total):money(sub)+(pickup?'':' + 运费');
+  // 只有后端真的算出合计才显示合计，否则显示小计（绝不是 $0.00 假合计）
+  $('tot').textContent=(q&&q.ok&&Number.isFinite(+q.total))?money(q.total):money(sub);
   $('quote').innerHTML=rows(q,sub);
   const probs=[];
-  if(!pickup){
-    const [okA,why]=q.address_check||[true,''];
-    if(!okA) probs.push(['warn',addr?('地址格式：'+why):'请填送餐地址，例如 59-04 99th St, Corona, NY 11368']);
-    if(q.address&&q.address.warning) probs.push(['warn','提示：'+q.address.warning+'（不对的话，点上面候选里的正确地址）']);
-  }
   if(q.ok===false) probs.push(['err',q.error]);
   $('msgs').innerHTML=probs.map(p=>`<div class="msg ${p[0]}">${p[1]}</div>`).join('');
   $('submit').disabled=!q.ok||c===0;
-  const dist=q.distance?Number(q.distance.miles).toFixed(1)+' 英里':'';
-  $('barHint').textContent=`${c} 件 · ${pickup?'到店自取':(dist||'待填地址')}`;
+  $('barHint').textContent=`${c} 件 · 到店自取`;
 }
 function rows(q,sub){
   const r=[`<div class="r"><span>小计</span><span>${money(q.subtotal!=null?q.subtotal:sub)}</span></div>`];
   if(q.tax) r.push(`<div class="r"><span>税 ${(q.tax_rate*100).toFixed(3)}%</span><span>${money(q.tax)}</span></div>`);
-  if(!pickup&&q.delivery) r.push(`<div class="r"><span>配送费 ${q.delivery.tier?'（'+q.delivery.tier+'）':''}</span><span>${q.delivery.fee==null?'—':money(q.delivery.fee)}</span></div>`);
   if(q.tip) r.push(`<div class="r"><span>小费 ${Math.round(tipRate*100)}%</span><span>${money(q.tip)}</span></div>`);
-  if(q.distance&&!pickup) r.push(`<div class="r"><span>距离 / 预计送达</span><span>${Number(q.distance.miles).toFixed(2)} 英里 · ${q.eta_minutes||'—'} 分钟</span></div>`);
   r.push((q&&q.ok&&Number.isFinite(+q.total))
-    ? `<div class="r tot"><span>合计（现金）</span><span>${money(q.total)}</span></div>`
-    : `<div class="r tot"><span>合计（现金）</span><span>${pickup?'待后端计算':'填地址后计算'}</span></div>`);
+    ? `<div class="r tot"><span>合计（到店现金付款）</span><span>${money(q.total)}</span></div>`
+    : `<div class="r tot"><span>合计（到店现金付款）</span><span>待后端计算</span></div>`);
   return r.join('');
 }
 
 $('submit').onclick=async()=>{
   $('submit').disabled=true; $('submit').textContent='提交中…';
-  const body={items:items(),pickup,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
+  const body={items:items(),pickup:true,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
     remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:(cfg&&cfg.payment&&cfg.payment[0])||PAY_DEFAULT,
-    address:pickup?'':$('addr').value.trim(),source:'pages-delivery'};
+    address:'',source:'pages-delivery'};
   let order=null,printMsg='';
   if(!backend){
     $('msgs').innerHTML='<div class="msg err">暂时连不上店里服务器，无法下单；请稍后再试，或直接打电话订餐。</div>';
@@ -297,17 +256,12 @@ $('submit').onclick=async()=>{
       order=r.order; printMsg=r.print&&r.print.ok?`小票已打印（${r.print.driver}）`:`打印未成功：${(r.print&&(r.print.error||r.print.mode))||'未知'}`;
     }catch(e){ $('msgs').innerHTML='<div class="msg err">下单没成功：连不上店里服务器，请重试或直接打电话订餐。</div>'; $('submit').disabled=false; $('submit').textContent='下单'; return; }
   }else{
-    order={no:'D'+Date.now().toString().slice(-10),created_at:new Date().toLocaleString('zh-CN'),
-      customer:body.customer,phone:body.phone,address:Q.address?Q.address.matched:body.address,pickup,
-      remark:body.remark,items:body.items,subtotal:Q.subtotal,tax:Q.tax,tax_rate:Q.tax_rate,tip:Q.tip,
-      delivery_fee:Q.delivery_fee,total:Q.total,eta_minutes:Q.eta_minutes,pay_type:body.pay_type,
-      distance_miles:Q.distance?Q.distance.miles:null};
     printMsg='（这家店还没接打印机：小票没出，请把订单号告诉店员。）';
   }
   $('doneNo').textContent='订单号 '+order.no;
-  $('doneMsg').textContent=`${printMsg} ${pickup?'请到店取餐。':'送餐约 '+(order.eta_minutes||'?')+' 分钟。'} 请备好现金 ${money(order.total)}。`;
+  $('doneMsg').textContent=`${printMsg} 请到店取餐，备好现金 ${money(order.total)}。`;
   $('doneRcpt').textContent=WXMenu.renderReceipt(order,{name:SHOP.name,slogan:SHOP.slogan,phone:SHOP.phone,footer:'谢谢惠顾|现金支付'},32);
-  saveCustomer({name:body.customer,phone:body.phone,address:body.pickup?'':body.address});
+  saveCustomer({name:body.customer,phone:body.phone});
   $('done').classList.add('show');
 };
 // ---- 老客取回 + 记住上次填的资料 ----
@@ -320,7 +274,6 @@ function prefillSaved(){
   const s=savedCustomer();
   if(s.phone&&!$('phone').value)   $('phone').value=s.phone;
   if(s.name&&!$('cust').value)     $('cust').value=s.name;
-  if(s.address&&!$('addr').value)  $('addr').value=s.address;
   if(s.phone) $('rp').value=s.phone;
 }
 
@@ -344,7 +297,6 @@ async function recall(){
     if(!r.ok){$('rmsg').textContent=r.error||'查不到，请直接填资料。';return}
     if(!r.found){$('rmsg').textContent='这个号码还没有下过单，直接填资料就行。';return}
     if(!$('cust').value) $('cust').value=r.name||'';
-    if(!$('addr').value&&r.address) $('addr').value=r.address;
     $('phone').value=p;
     $('rmsg').textContent=`欢迎回来，${r.name||'老客'}：这个号码来过 ${r.orders} 次`
       + (r.last_at?`，上次 ${String(r.last_at).replace('T',' ').slice(0,16)}`:'') + '。';
@@ -357,8 +309,7 @@ async function recall(){
         $('rmsg').textContent=`已加入购物车 ${res.ok} 道菜`
           +(res.gone.length?`；这些现在没有：${res.gone.join('、')}`:'' )+'。';};
     }
-    saveCustomer({name:$('cust').value.trim(),phone:p,address:$('addr').value.trim()});
-    onAddr();
+    saveCustomer({name:$('cust').value.trim(),phone:p});
   }catch(e){$('rmsg').textContent='查询失败：连不上店里服务器。'}
 }
 
