@@ -29,6 +29,7 @@ globalThis.document = {
   getElementById: (id) => elMap[id] || (elMap[id] = mkEl('#' + id)),
   createElement: (t) => mkEl(t), querySelectorAll: () => [], documentElement: mkEl('html'),
 };
+globalThis.document.head = mkEl('head');   // 自取导航块会往 head 里挂 Leaflet 的 link/script
 const els = new Proxy({}, { get: (t, k) => globalThis.document.getElementById(k) });
 globalThis.window = globalThis;
 const store = {};

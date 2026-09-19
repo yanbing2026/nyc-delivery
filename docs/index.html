@@ -72,6 +72,18 @@ summary{font-size:14px;color:var(--dim)}
 </details>
 
 <div class="block">
+  <!-- 自取导航块：地图 + 跳转到顾客手机自带的地图 App -->
+  <div class="recall">
+    <div class="rh">📍 怎么来取？</div>
+    <div class="hint" id="pickupAddr">店址加载中…</div>
+    <div id="mapBox"></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button type="button" id="navApple" style="flex:1;min-height:46px;border-radius:10px;border:1px solid var(--line);background:#111;color:#fff;font-size:15px;font-weight:600">🧭 Apple 地图导航</button>
+      <button type="button" id="navGoogle" style="flex:1;min-height:46px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:15px;font-weight:600">🗺️ Google 地图导航</button>
+    </div>
+    <div class="hint">导航会打开你手机自带的地图 App（跳到你自己的地图里开始路线）。</div>
+  </div>
+
   <!-- 老客取回：输手机号带出上次的姓名/电话（不上验证，见 INSTRUCTIONS 的隐私说明） -->
   <div class="recall">
     <div class="rh">老客？输手机号带出上次的资料</div>
@@ -171,6 +183,30 @@ async function reloadConfig(){
     }
     $('shopName').textContent=SHOP.name;
     document.title=`${SHOP.name} · 在线点单`;
+    // 自取：店址 + 地图 + 导航按钮（导航不依赖坐标也成立，坐标有则用 destination 精确传）
+    const rAddr=cfg.restaurant_addr||'';
+    $('pickupAddr').textContent=rAddr?('店址：'+rAddr):'店址待店里发布菜单时更新';
+    const geo=(cfg.restaurant&&Number.isFinite(+cfg.restaurant.lat)&&Number.isFinite(+cfg.restaurant.lon))?cfg.restaurant:null;
+    const daddr=encodeURIComponent(rAddr);
+    window.__nav=(os)=>{ if(!rAddr) return;
+      const u=os==='g'
+        ? (geo?`https://www.google.com/maps/dir/?api=1&destination=${geo.lat},${geo.lon}&destination_place_id=&travelmode=driving`:`https://www.google.com/maps/dir/?api=1&destination=${daddr}`)
+        : (geo?`maps://?daddr=${geo.lat},${geo.lon}&dirflg=d`:`maps://?daddr=${daddr}&dirflg=d`);
+      location.href=u; };
+    $('navApple').onclick=()=>window.__nav('a');
+    $('navGoogle').onclick=()=>window.__nav('g');
+    // 内嵌小地图：Leaflet CDN，加载失败就静默跳过（按钮仍可用）
+    const ml=document.createElement('link'); ml.rel='stylesheet';
+    ml.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(ml);
+    const ms=document.createElement('script'); ms.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; ms.async=true;
+    ms.onload=()=>{ if(!geo||!window.L||!document.getElementById('mapBox')) return;
+      const map=L.map('mapBox',{zoomControl:false,attributionControl:false,scrollWheelZoom:false});
+      map.setView([geo.lat,geo.lon],15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+      L.circleMarker([geo.lat,geo.lon],{radius:9,color:'#c8321f',fillColor:'#c8321f',fillOpacity:1}).addTo(map);
+      document.getElementById('mapBox').style.cssText='height:180px;border-radius:10px;border:1px solid var(--line);margin-top:8px';
+    };
+    document.head.appendChild(ms);
     $('shopLine').textContent=[SHOP.slogan,SHOP.phone,`起送 ${money(cfg.min_order)}`,'现金支付 · 到店自取'].filter(Boolean).join(' · ');
     renderTips();
     applyDevVisibility();
