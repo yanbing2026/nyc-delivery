@@ -211,7 +211,7 @@ async function reloadConfig(){
       setTimeout(()=>map.invalidateSize(),50);   // 视口异步变化后重算一次，保险
     };
     document.head.appendChild(ms);
-    $('shopLine').textContent=[SHOP.slogan,SHOP.phone,`起送 ${money(cfg.min_order)}`,'现金支付 · 到店自取'].filter(Boolean).join(' · ');
+    $('shopLine').textContent=[SHOP.phone,'请提前24小时预约','现金支付','到店自取'].filter(Boolean).join(' · ');
     renderTips();
     applyDevVisibility();
     $('shopHint').innerHTML=`✓ 店址：${cfg.restaurant_addr}<br>✓ 规则：${cfg.free_miles} 英里内免费 · 超出每英里 ${money(cfg.per_mile_beyond)}`

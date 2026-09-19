@@ -136,7 +136,9 @@ globalThis.fetch = async (u, opts) => {
   check('顾客默认看不到店址/配送费规则（店员面板隐藏）', els['devBox'].style.display === 'none', els['devBox'].style.display);
   check('页头也不出现内部话术', !/服务器计算|后端|菜单编辑页/.test(els['shopLine'].textContent),
     els['shopLine'].textContent);
-  check('起送价显示在后端信息里', els['shopLine'].textContent.includes('起送'), els['shopLine'].textContent);
+  check('页头显示后端的电话/口号，不出现页面里写死的 917-555-0123',
+    els['shopLine'].textContent.includes('718-000-0000') && !els['shopLine'].textContent.includes('917-555-0123'),
+    els['shopLine'].textContent);
   // 调试开关：地址栏 ?debug=1 或 localStorage 里 wxmenu_debug=1 时才显示
   localStorage.setItem('wxmenu_debug', '1');
   await T.reloadConfig();
