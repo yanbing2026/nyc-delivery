@@ -122,6 +122,7 @@ async function lookupCustomer(env, body, ip) {
 async function createOrder(env, body, ip) {
   const asked = Array.isArray(body.items) ? body.items : [];
   if (!asked.length) return json({ ok: false, error: "购物车是空的" }, 400);
+  if (await rateLimited(env, ip, 20)) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
   const cfg = await getSettings(env);
   const pickup = !!body.pickup;
   // 菜单以店里发布上来的为准：菜名和价格都从库里取，不信前端传的。
@@ -145,8 +146,6 @@ async function createOrder(env, body, ip) {
   const q = await D.quote(cfg.restaurant, pickup ? "" : (body.address || "").trim(), subtotal, cfg,
     Number(body.tip_rate || 0), pickup, env.GOOGLE_MAPS_API_KEY);
   if (!q.ok) return json({ ok: false, error: q.error, quote: q }, 400);
-  if (await rateLimited(env, ip)) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
-
   const id = orderNo();
   const manual = !pickup && (q.distance || {}).ok === false;
   await env.DB.prepare(`INSERT INTO orders
@@ -170,7 +169,7 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname.replace(/\/+$/, "") || "/";
     const ip = request.headers.get("cf-connecting-ip") || "local";
-    const agentKey = request.headers.get("x-agent-key") || url.searchParams.get("key") || "";
+    const agentKey = request.headers.get("x-agent-key") || "";
 
     try {
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -188,6 +187,7 @@ export default {
       if (p === "/api/health") return json({ ok: true, at: nowISO() });
 
       if (p === "/api/quote") {
+        if (await rateLimited(env, ip, 120)) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
         const cfg = await getSettings(env);
         const q = await D.quote(cfg.restaurant, url.searchParams.get("address") || "",
           Number(url.searchParams.get("subtotal") || 0), cfg,
@@ -196,8 +196,10 @@ export default {
         return json(q);
       }
 
-      if (p === "/api/autocomplete")
+      if (p === "/api/autocomplete") {
+        if (await rateLimited(env, ip, 120)) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
         return json({ ok: true, items: await D.geocodeCandidates(url.searchParams.get("q") || "", 6, env.GOOGLE_MAPS_API_KEY) });
+      }
 
       if (p === "/api/lookup" && request.method === "POST")
         return lookupCustomer(env, await request.json().catch(() => ({})), ip);
@@ -212,30 +214,45 @@ export default {
 
       if (p === "/api/agent/pending") {
         const row = await env.DB.prepare(
-          "SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1").first();
+          "SELECT id FROM orders WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1").first();
         if (!row) return json({ ok: true, order: null, msg: "没有待处理订单" });
-        await env.DB.prepare("UPDATE orders SET status='taken', taken_at=?1 WHERE id=?2")
-          .bind(nowISO(), row.id).run();
-        row.status = "taken"; row.taken_at = nowISO();
-        return json({ ok: true, order: publicOrder(row) });
+        const takenAt = nowISO();
+        const claimed = await env.DB.prepare(
+          "UPDATE orders SET status='taken', taken_at=?1 WHERE id=?2 AND status='pending'")
+          .bind(takenAt, row.id).run();
+        if (!(claimed.meta && claimed.meta.changes === 1))
+          return json({ ok: false, error: "这单刚被另一台设备取走，请重新刷新" }, 409);
+        const claimedRow = await env.DB.prepare("SELECT * FROM orders WHERE id=?1").bind(row.id).first();
+        return json({ ok: true, order: publicOrder(claimedRow) });
       }
 
       if (p === "/api/agent/status" && request.method === "POST") {
         const b = await request.json().catch(() => ({}));
-        const allow = ["printed", "failed", "done", "void", "taken", "pending"];
-        const status = allow.includes(b.status) ? b.status : "failed";
+        const requested = String(b.status || "");
         const id = String(b.id || "");
         const err = String(b.error || "").slice(0, 300);
         const cash = b.cash_collected === undefined || b.cash_collected === null ? null : Number(b.cash_collected);
+        const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
+        if (!row) return json({ ok: false, error: "订单不存在" }, 404);
+        const transitions = {
+          pending: ["taken", "void"],
+          taken: ["printed", "failed", "void"],
+          printed: ["done", "failed", "void"],
+          failed: ["taken", "void"],
+          done: [],
+          void: [],
+        };
+        if (!transitions[row.status]?.includes(requested))
+          return json({ ok: false, error: `不允许从 ${row.status} 变成 ${requested}` }, 409);
         const sets = ["status = ?1", "error = ?2", "cash_collected = ?3"];
-        const args = [status, err, cash];
-        if (status === "printed") { args.push(nowISO()); sets.push(`printed_at = ?${args.length}`); }
-        if (status === "done") { args.push(nowISO()); sets.push(`done_at = ?${args.length}`); }
+        const args = [requested, err, cash];
+        if (requested === "printed") { args.push(nowISO()); sets.push(`printed_at = ?${args.length}`); }
+        if (requested === "done") { args.push(nowISO()); sets.push(`done_at = ?${args.length}`); }
         args.push(id);
         await env.DB.prepare(`UPDATE orders SET ${sets.join(", ")} WHERE id = ?${args.length}`)
           .bind(...args).run();
-        const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
-        return json({ ok: !!row, order: row ? publicOrder(row) : null });
+        const nextRow = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
+        return json({ ok: true, order: publicOrder(nextRow) });
       }
 
       // 设备同步用：拉一批订单（默认最近 30 天），记账在设备本地做
