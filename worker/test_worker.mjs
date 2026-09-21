@@ -153,6 +153,7 @@ check("前端传的假金额被无视（自取按 30.38 收）", fake.data.order
 
 console.log("== 5. 店里设备取单 / 回写 ==");
 check("没 key 取单 → 403", (await call("/api/agent/pending")).status === 403);
+check("URL query 里的 key 不再被接受", (await call("/api/agent/pending?key=test-key")).status === 403);
 check("key 错 → 403", (await call("/api/agent/pending", { headers: { "x-agent-key": "wrong" } })).status === 403);
 const p1 = await agent("/api/agent/pending");
 check("取到最早那一单", p1.data.order && p1.data.order.no === o.no, p1.data.order);
@@ -163,6 +164,8 @@ check("订单列表里状态是 taken", row && row.status === "taken", row && ro
 check("同一单不会被取两次", (await agent("/api/agent/pending")).data.order.no !== o.no);
 const pr = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "printed" } });
 check("回写已打印", pr.data.ok && pr.data.order.status === "printed" && !!pr.data.order.printed_at, pr.data.order && pr.data.order.printed_at);
+const illegal = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "pending" } });
+check("已打印订单不能倒退回 pending", illegal.status === 409 && /不允许/.test(illegal.data.error || ""), illegal.data);
 const dn = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "done", cash_collected: 40.0 } });
 check("回写完成 + 骑手实收现金 40", dn.data.order.status === "done" && dn.data.order.cash_collected === 40, dn.data.order);
 
