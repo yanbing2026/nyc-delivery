@@ -326,7 +326,7 @@ check("测试数据已还原（后面的用例还要用默认菜单）",
   [cfgBack2.shop.name, cfgBack2.menu.length]);
 
 console.log("== 8. 限流（同一 IP 一小时 20 单） ==");
-for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));
+for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("order:local", Math.floor(Date.now() / 1000));
 const rl = await call("/api/order", { method: "POST", body: { items: MENU, pickup: true } });
 check("刷单被挡 429", rl.status === 429 && /太频繁/.test(rl.data.error), rl.data.error);
 
@@ -361,7 +361,7 @@ console.log("== 9. 老客取回（/api/lookup，只凭手机号） ==");
 
   // 限流：和下单共用 hits 表，取回上限是 60/小时
   db.prepare("DELETE FROM hits").run();
-  for (let i = 0; i < 60; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));
+  for (let i = 0; i < 60; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("lookup:local", Math.floor(Date.now() / 1000));
   const rl2 = await call("/api/lookup", { method: "POST", body: { phone: "9175550123" } });
   check("刷取回被挡 429", rl2.status === 429, rl2.data.error);
   db.prepare("DELETE FROM hits").run();
