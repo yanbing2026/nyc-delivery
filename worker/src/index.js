@@ -102,20 +102,15 @@ async function lookupCustomer(env, body, ip) {
   return json({
     ok: true, found: true,
     name: String(last.customer || "").slice(0, 60),
-    address: String(last.address || "").slice(0, 200),
-    borough: String(last.borough || ""),
     orders: Number(cnt && cnt.n) || list.length,
     last_at: last.created_at,
     // 上一单（给"再来一单"用：只给 id 和数量，价格以菜单当前价为准）
     last_order: {
-      no: last.id, total: last.total, status: last.status, pickup: !!last.pickup,
+      status: last.status, pickup: !!last.pickup,
       created_at: last.created_at,
       items: parseItems(last.items).map((i) => ({ id: i.id, name: i.name, qty: i.qty })).slice(0, 40),
     },
-    recent: list.slice(0, 3).map((r) => ({
-      no: r.id, created_at: r.created_at, total: r.total, status: r.status,
-      count: parseItems(r.items).length, pickup: !!r.pickup,
-    })),
+    // 不把订单号、金额、地址或完整历史暴露给只凭手机号的网页查询。
   });
 }
 
