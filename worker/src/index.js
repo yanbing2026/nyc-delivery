@@ -55,12 +55,13 @@ async function saveSettings(env, cfg) {
 }
 
 // 简易限流：同一个 IP 一小时最多 N 单
-async function rateLimited(env, ip, limit = 20) {
+async function rateLimited(env, ip, limit = 20, bucket = "default") {
   await env.DB.prepare("DELETE FROM hits WHERE ts < ?1").bind(Math.floor(Date.now() / 1000) - 7200).run();
   const since = Math.floor(Date.now() / 1000) - 3600;
-  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM hits WHERE ip = ?1 AND ts > ?2").bind(ip, since).first();
+  const key = `${bucket}:${ip}`;
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM hits WHERE ip = ?1 AND ts > ?2").bind(key, since).first();
   if ((row?.n ?? 0) >= limit) return true;
-  await env.DB.prepare("INSERT INTO hits (ip, ts) VALUES (?1, ?2)").bind(ip, Math.floor(Date.now() / 1000)).run();
+  await env.DB.prepare("INSERT INTO hits (ip, ts) VALUES (?1, ?2)").bind(key, Math.floor(Date.now() / 1000)).run();
   return false;
 }
 
@@ -83,7 +84,7 @@ const digitsOf = (s) => String(s || "").replace(/[^0-9]/g, "").slice(0, 15);
 async function lookupCustomer(env, body, ip) {
   const want = digitsOf(body && body.phone);
   if (want.length < 10) return json({ ok: false, error: "请填完整手机号（10 位以上数字）" }, 400);
-  if (await rateLimited(env, ip, 60)) return json({ ok: false, error: "查询太频繁，请过一会儿再试" }, 429);
+  if (await rateLimited(env, ip, 60, "lookup")) return json({ ok: false, error: "查询太频繁，请过一会儿再试" }, 429);
 
   // 库里存的是顾客当初写的原样号码，所以这里用去符号后的等值比较（单店数据量，不用索引也够快）
   const norm = "REPLACE(REPLACE(REPLACE(REPLACE(phone,'-',''),' ',''),'(',''),')','')";
@@ -117,7 +118,7 @@ async function lookupCustomer(env, body, ip) {
 async function createOrder(env, body, ip) {
   const asked = Array.isArray(body.items) ? body.items : [];
   if (!asked.length) return json({ ok: false, error: "购物车是空的" }, 400);
-  if (await rateLimited(env, ip, 20)) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
+  if (await rateLimited(env, ip, 20, "order")) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
   const cfg = await getSettings(env);
   const pickup = !!body.pickup;
   // 菜单以店里发布上来的为准：菜名和价格都从库里取，不信前端传的。
@@ -182,7 +183,7 @@ export default {
       if (p === "/api/health") return json({ ok: true, at: nowISO() });
 
       if (p === "/api/quote") {
-        if (await rateLimited(env, ip, 120)) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
+        if (await rateLimited(env, ip, 120, "quote")) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
         const cfg = await getSettings(env);
         const q = await D.quote(cfg.restaurant, url.searchParams.get("address") || "",
           Number(url.searchParams.get("subtotal") || 0), cfg,
@@ -192,7 +193,7 @@ export default {
       }
 
       if (p === "/api/autocomplete") {
-        if (await rateLimited(env, ip, 120)) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
+        if (await rateLimited(env, ip, 120, "autocomplete")) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
         return json({ ok: true, items: await D.geocodeCandidates(url.searchParams.get("q") || "", 6, env.GOOGLE_MAPS_API_KEY) });
       }
 
