@@ -23,7 +23,7 @@ const D1 = {
       bind(...args) { api._args = args; return api; },
       async first() { const r = st.get(...api._args); return r === undefined ? null : { ...r }; },
       async all() { return { results: st.all(...api._args).map((r) => ({ ...r })) }; },
-      async run() { st.run(...api._args); return { success: true }; },
+      async run() { const r = st.run(...api._args); return { success: true, meta: { changes: r.changes } }; },
     };
     return api;
   },
@@ -171,9 +171,10 @@ check("回写完成 + 骑手实收现金 40", dn.data.order.status === "done" &&
 
 console.log("== 6. 日报汇总（店里 App 对账用） ==");
 await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true } });
-// 把还没结束的单都走完（模拟店里 App：打印→完成→登记实收现金）
+// 把还没结束的单都走完（模拟店里 App：认领→打印→完成→登记实收现金）
 const open = (await agent("/api/agent/orders?limit=50")).data.orders.filter((x) => x.status !== "done");
 for (const x of open) {
+  if (x.status === "pending") await agent("/api/agent/status", { method: "POST", body: { id: x.no, status: "taken" } });
   await agent("/api/agent/status", { method: "POST", body: { id: x.no, status: "printed" } });
   await agent("/api/agent/status", { method: "POST", body: { id: x.no, status: "done", cash_collected: x.total } });
 }
