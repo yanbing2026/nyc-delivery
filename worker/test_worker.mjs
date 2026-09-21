@@ -356,7 +356,8 @@ console.log("== 9. 老客取回（/api/lookup，只凭手机号） ==");
   check("带回来过次数", info.orders >= 1, info.orders);
   check("带回上一单的菜（给再来一单用）", Array.isArray(info.last_order?.items) && info.last_order.items[0].id === MENU[0].id,
     info.last_order);
-  check("不回传多余字段（没有完整历史/没有其他顾客）", info.recent.length <= 3 && info.address !== undefined, Object.keys(info));
+  check("手机号查询不回传地址、订单号、金额或完整历史", !("address" in info) && !("recent" in info)
+    && !("no" in (info.last_order || {})) && !("total" in (info.last_order || {})), Object.keys(info));
 
   // 限流：和下单共用 hits 表，取回上限是 60/小时
   db.prepare("DELETE FROM hits").run();
