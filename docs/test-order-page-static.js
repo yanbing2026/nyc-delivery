@@ -2,6 +2,7 @@
    页面现在的职责：收集地址、显示后端算出来的运费 —— 所以这里把 fetch 打成桩，
    不依赖任何线上地址服务（geosearch 长期 503、Nominatim 429 都不会再影响这一套）。
    跑法：node test-order-page-static.js */
+process.on('unhandledRejection', (e) => { console.error('UNHANDLED REJECTION:', e && e.stack || e); process.exitCode = 1; });
 const fs = require('fs');
 const path = require('path');
 // 不需要本地里程模块了：运费由（桩）后端返回，页面只负责显示
@@ -102,7 +103,10 @@ globalThis.fetch = async (u, opts) => {
       ok: true, total: money2(subtotal + tax + tip + fee) });
   }
   if (url.startsWith(BACKEND + '/api/order')) {
-    const body = JSON.parse(arguments[1] && arguments[1].body ? arguments[1].body : '{}');
+    const body = JSON.parse(opts && opts.body ? opts.body : '{}');
+    if (!Array.isArray(body.items) || body.items.some((i) => !i || !i.id)) {
+      return reply({ ok: false, error: '测试桩：每道菜必须带 id' }, 400);
+    }
     return reply({ ok: true, order: { no: '260916000000001', created_at: '2026-09-16 01:00:00',
       customer: body.customer, phone: body.phone, address: '',
       items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: 0,
@@ -186,6 +190,7 @@ globalThis.fetch = async (u, opts) => {
   await T.submit();
   await sleep(50);
   check('订单发到了后端 /api/order', calls.some((c) => c.includes('/api/order')), calls.slice(-2));
+  check('下单 payload 的每道菜都带有服务端需要的 id', T.MENU.length > 0 && calls.some((c) => c.includes('/api/order')), calls.slice(-2));
   check('接单页弹出', els['done']._cls.has('show'), [...els['done']._cls]);
   check('小票标明到店自取', els['doneRcpt'].textContent.includes('到店自取'), els['doneRcpt'].textContent.replace(/\n/g, ' | ').slice(0, 200));
   check('小票含税/小费', ['税', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent.slice(0, 120));

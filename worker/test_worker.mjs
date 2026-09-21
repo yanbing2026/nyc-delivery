@@ -23,7 +23,7 @@ const D1 = {
       bind(...args) { api._args = args; return api; },
       async first() { const r = st.get(...api._args); return r === undefined ? null : { ...r }; },
       async all() { return { results: st.all(...api._args).map((r) => ({ ...r })) }; },
-      async run() { st.run(...api._args); return { success: true }; },
+      async run() { const r = st.run(...api._args); return { success: true, meta: { changes: r.changes } }; },
     };
     return api;
   },
@@ -153,6 +153,7 @@ check("前端传的假金额被无视（自取按 30.38 收）", fake.data.order
 
 console.log("== 5. 店里设备取单 / 回写 ==");
 check("没 key 取单 → 403", (await call("/api/agent/pending")).status === 403);
+check("URL query 里的 key 不再被接受", (await call("/api/agent/pending?key=test-key")).status === 403);
 check("key 错 → 403", (await call("/api/agent/pending", { headers: { "x-agent-key": "wrong" } })).status === 403);
 const p1 = await agent("/api/agent/pending");
 check("取到最早那一单", p1.data.order && p1.data.order.no === o.no, p1.data.order);
@@ -163,14 +164,17 @@ check("订单列表里状态是 taken", row && row.status === "taken", row && ro
 check("同一单不会被取两次", (await agent("/api/agent/pending")).data.order.no !== o.no);
 const pr = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "printed" } });
 check("回写已打印", pr.data.ok && pr.data.order.status === "printed" && !!pr.data.order.printed_at, pr.data.order && pr.data.order.printed_at);
+const illegal = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "pending" } });
+check("已打印订单不能倒退回 pending", illegal.status === 409 && /不允许/.test(illegal.data.error || ""), illegal.data);
 const dn = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "done", cash_collected: 40.0 } });
 check("回写完成 + 骑手实收现金 40", dn.data.order.status === "done" && dn.data.order.cash_collected === 40, dn.data.order);
 
 console.log("== 6. 日报汇总（店里 App 对账用） ==");
 await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true } });
-// 把还没结束的单都走完（模拟店里 App：打印→完成→登记实收现金）
+// 把还没结束的单都走完（模拟店里 App：认领→打印→完成→登记实收现金）
 const open = (await agent("/api/agent/orders?limit=50")).data.orders.filter((x) => x.status !== "done");
 for (const x of open) {
+  if (x.status === "pending") await agent("/api/agent/status", { method: "POST", body: { id: x.no, status: "taken" } });
   await agent("/api/agent/status", { method: "POST", body: { id: x.no, status: "printed" } });
   await agent("/api/agent/status", { method: "POST", body: { id: x.no, status: "done", cash_collected: x.total } });
 }
@@ -323,7 +327,7 @@ check("测试数据已还原（后面的用例还要用默认菜单）",
   [cfgBack2.shop.name, cfgBack2.menu.length]);
 
 console.log("== 8. 限流（同一 IP 一小时 20 单） ==");
-for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));
+for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("order:local", Math.floor(Date.now() / 1000));
 const rl = await call("/api/order", { method: "POST", body: { items: MENU, pickup: true } });
 check("刷单被挡 429", rl.status === 429 && /太频繁/.test(rl.data.error), rl.data.error);
 
@@ -353,11 +357,12 @@ console.log("== 9. 老客取回（/api/lookup，只凭手机号） ==");
   check("带回来过次数", info.orders >= 1, info.orders);
   check("带回上一单的菜（给再来一单用）", Array.isArray(info.last_order?.items) && info.last_order.items[0].id === MENU[0].id,
     info.last_order);
-  check("不回传多余字段（没有完整历史/没有其他顾客）", info.recent.length <= 3 && info.address !== undefined, Object.keys(info));
+  check("手机号查询不回传地址、订单号、金额或完整历史", !("address" in info) && !("recent" in info)
+    && !("no" in (info.last_order || {})) && !("total" in (info.last_order || {})), Object.keys(info));
 
   // 限流：和下单共用 hits 表，取回上限是 60/小时
   db.prepare("DELETE FROM hits").run();
-  for (let i = 0; i < 60; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));
+  for (let i = 0; i < 60; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("lookup:local", Math.floor(Date.now() / 1000));
   const rl2 = await call("/api/lookup", { method: "POST", body: { phone: "9175550123" } });
   check("刷取回被挡 429", rl2.status === 429, rl2.data.error);
   db.prepare("DELETE FROM hits").run();

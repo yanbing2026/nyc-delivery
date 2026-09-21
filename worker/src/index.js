@@ -55,12 +55,13 @@ async function saveSettings(env, cfg) {
 }
 
 // 简易限流：同一个 IP 一小时最多 N 单
-async function rateLimited(env, ip, limit = 20) {
+async function rateLimited(env, ip, limit = 20, bucket = "default") {
   await env.DB.prepare("DELETE FROM hits WHERE ts < ?1").bind(Math.floor(Date.now() / 1000) - 7200).run();
   const since = Math.floor(Date.now() / 1000) - 3600;
-  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM hits WHERE ip = ?1 AND ts > ?2").bind(ip, since).first();
+  const key = `${bucket}:${ip}`;
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM hits WHERE ip = ?1 AND ts > ?2").bind(key, since).first();
   if ((row?.n ?? 0) >= limit) return true;
-  await env.DB.prepare("INSERT INTO hits (ip, ts) VALUES (?1, ?2)").bind(ip, Math.floor(Date.now() / 1000)).run();
+  await env.DB.prepare("INSERT INTO hits (ip, ts) VALUES (?1, ?2)").bind(key, Math.floor(Date.now() / 1000)).run();
   return false;
 }
 
@@ -83,7 +84,7 @@ const digitsOf = (s) => String(s || "").replace(/[^0-9]/g, "").slice(0, 15);
 async function lookupCustomer(env, body, ip) {
   const want = digitsOf(body && body.phone);
   if (want.length < 10) return json({ ok: false, error: "请填完整手机号（10 位以上数字）" }, 400);
-  if (await rateLimited(env, ip, 60)) return json({ ok: false, error: "查询太频繁，请过一会儿再试" }, 429);
+  if (await rateLimited(env, ip, 60, "lookup")) return json({ ok: false, error: "查询太频繁，请过一会儿再试" }, 429);
 
   // 库里存的是顾客当初写的原样号码，所以这里用去符号后的等值比较（单店数据量，不用索引也够快）
   const norm = "REPLACE(REPLACE(REPLACE(REPLACE(phone,'-',''),' ',''),'(',''),')','')";
@@ -102,26 +103,22 @@ async function lookupCustomer(env, body, ip) {
   return json({
     ok: true, found: true,
     name: String(last.customer || "").slice(0, 60),
-    address: String(last.address || "").slice(0, 200),
-    borough: String(last.borough || ""),
     orders: Number(cnt && cnt.n) || list.length,
     last_at: last.created_at,
     // 上一单（给"再来一单"用：只给 id 和数量，价格以菜单当前价为准）
     last_order: {
-      no: last.id, total: last.total, status: last.status, pickup: !!last.pickup,
+      status: last.status, pickup: !!last.pickup,
       created_at: last.created_at,
       items: parseItems(last.items).map((i) => ({ id: i.id, name: i.name, qty: i.qty })).slice(0, 40),
     },
-    recent: list.slice(0, 3).map((r) => ({
-      no: r.id, created_at: r.created_at, total: r.total, status: r.status,
-      count: parseItems(r.items).length, pickup: !!r.pickup,
-    })),
+    // 不把订单号、金额、地址或完整历史暴露给只凭手机号的网页查询。
   });
 }
 
 async function createOrder(env, body, ip) {
   const asked = Array.isArray(body.items) ? body.items : [];
   if (!asked.length) return json({ ok: false, error: "购物车是空的" }, 400);
+  if (await rateLimited(env, ip, 20, "order")) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
   const cfg = await getSettings(env);
   const pickup = !!body.pickup;
   // 菜单以店里发布上来的为准：菜名和价格都从库里取，不信前端传的。
@@ -145,8 +142,6 @@ async function createOrder(env, body, ip) {
   const q = await D.quote(cfg.restaurant, pickup ? "" : (body.address || "").trim(), subtotal, cfg,
     Number(body.tip_rate || 0), pickup, env.GOOGLE_MAPS_API_KEY);
   if (!q.ok) return json({ ok: false, error: q.error, quote: q }, 400);
-  if (await rateLimited(env, ip)) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
-
   const id = orderNo();
   const manual = !pickup && (q.distance || {}).ok === false;
   await env.DB.prepare(`INSERT INTO orders
@@ -170,7 +165,7 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname.replace(/\/+$/, "") || "/";
     const ip = request.headers.get("cf-connecting-ip") || "local";
-    const agentKey = request.headers.get("x-agent-key") || url.searchParams.get("key") || "";
+    const agentKey = request.headers.get("x-agent-key") || "";
 
     try {
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -188,6 +183,7 @@ export default {
       if (p === "/api/health") return json({ ok: true, at: nowISO() });
 
       if (p === "/api/quote") {
+        if (await rateLimited(env, ip, 120, "quote")) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
         const cfg = await getSettings(env);
         const q = await D.quote(cfg.restaurant, url.searchParams.get("address") || "",
           Number(url.searchParams.get("subtotal") || 0), cfg,
@@ -196,8 +192,10 @@ export default {
         return json(q);
       }
 
-      if (p === "/api/autocomplete")
+      if (p === "/api/autocomplete") {
+        if (await rateLimited(env, ip, 120, "autocomplete")) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
         return json({ ok: true, items: await D.geocodeCandidates(url.searchParams.get("q") || "", 6, env.GOOGLE_MAPS_API_KEY) });
+      }
 
       if (p === "/api/lookup" && request.method === "POST")
         return lookupCustomer(env, await request.json().catch(() => ({})), ip);
@@ -212,30 +210,45 @@ export default {
 
       if (p === "/api/agent/pending") {
         const row = await env.DB.prepare(
-          "SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1").first();
+          "SELECT id FROM orders WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1").first();
         if (!row) return json({ ok: true, order: null, msg: "没有待处理订单" });
-        await env.DB.prepare("UPDATE orders SET status='taken', taken_at=?1 WHERE id=?2")
-          .bind(nowISO(), row.id).run();
-        row.status = "taken"; row.taken_at = nowISO();
-        return json({ ok: true, order: publicOrder(row) });
+        const takenAt = nowISO();
+        const claimed = await env.DB.prepare(
+          "UPDATE orders SET status='taken', taken_at=?1 WHERE id=?2 AND status='pending'")
+          .bind(takenAt, row.id).run();
+        if (!(claimed.meta && claimed.meta.changes === 1))
+          return json({ ok: false, error: "这单刚被另一台设备取走，请重新刷新" }, 409);
+        const claimedRow = await env.DB.prepare("SELECT * FROM orders WHERE id=?1").bind(row.id).first();
+        return json({ ok: true, order: publicOrder(claimedRow) });
       }
 
       if (p === "/api/agent/status" && request.method === "POST") {
         const b = await request.json().catch(() => ({}));
-        const allow = ["printed", "failed", "done", "void", "taken", "pending"];
-        const status = allow.includes(b.status) ? b.status : "failed";
+        const requested = String(b.status || "");
         const id = String(b.id || "");
         const err = String(b.error || "").slice(0, 300);
         const cash = b.cash_collected === undefined || b.cash_collected === null ? null : Number(b.cash_collected);
+        const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
+        if (!row) return json({ ok: false, error: "订单不存在" }, 404);
+        const transitions = {
+          pending: ["taken", "void"],
+          taken: ["printed", "failed", "void"],
+          printed: ["done", "failed", "void"],
+          failed: ["taken", "void"],
+          done: [],
+          void: [],
+        };
+        if (!transitions[row.status]?.includes(requested))
+          return json({ ok: false, error: `不允许从 ${row.status} 变成 ${requested}` }, 409);
         const sets = ["status = ?1", "error = ?2", "cash_collected = ?3"];
-        const args = [status, err, cash];
-        if (status === "printed") { args.push(nowISO()); sets.push(`printed_at = ?${args.length}`); }
-        if (status === "done") { args.push(nowISO()); sets.push(`done_at = ?${args.length}`); }
+        const args = [requested, err, cash];
+        if (requested === "printed") { args.push(nowISO()); sets.push(`printed_at = ?${args.length}`); }
+        if (requested === "done") { args.push(nowISO()); sets.push(`done_at = ?${args.length}`); }
         args.push(id);
         await env.DB.prepare(`UPDATE orders SET ${sets.join(", ")} WHERE id = ?${args.length}`)
           .bind(...args).run();
-        const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
-        return json({ ok: !!row, order: row ? publicOrder(row) : null });
+        const nextRow = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
+        return json({ ok: true, order: publicOrder(nextRow) });
       }
 
       // 设备同步用：拉一批订单（默认最近 30 天），记账在设备本地做
