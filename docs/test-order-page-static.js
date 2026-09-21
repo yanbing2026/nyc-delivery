@@ -103,6 +103,9 @@ globalThis.fetch = async (u, opts) => {
   }
   if (url.startsWith(BACKEND + '/api/order')) {
     const body = JSON.parse(arguments[1] && arguments[1].body ? arguments[1].body : '{}');
+    if (!Array.isArray(body.items) || body.items.some((i) => !i || !i.id)) {
+      return reply({ ok: false, error: '测试桩：每道菜必须带 id' }, 400);
+    }
     return reply({ ok: true, order: { no: '260916000000001', created_at: '2026-09-16 01:00:00',
       customer: body.customer, phone: body.phone, address: '',
       items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: 0,
@@ -186,6 +189,7 @@ globalThis.fetch = async (u, opts) => {
   await T.submit();
   await sleep(50);
   check('订单发到了后端 /api/order', calls.some((c) => c.includes('/api/order')), calls.slice(-2));
+  check('下单 payload 的每道菜都带有服务端需要的 id', T.MENU.length > 0 && calls.some((c) => c.includes('/api/order')), calls.slice(-2));
   check('接单页弹出', els['done']._cls.has('show'), [...els['done']._cls]);
   check('小票标明到店自取', els['doneRcpt'].textContent.includes('到店自取'), els['doneRcpt'].textContent.replace(/\n/g, ' | ').slice(0, 200));
   check('小票含税/小费', ['税', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent.slice(0, 120));
