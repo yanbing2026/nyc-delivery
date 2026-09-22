@@ -170,7 +170,8 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname.replace(/\/+$/, "") || "/";
     const ip = request.headers.get("cf-connecting-ip") || "local";
-    const agentKey = request.headers.get("x-agent-key") || url.searchParams.get("key") || "";
+    // key 只从 header 走：query string 里的 key 会留在 Cloudflare 日志和 URL 里
+    const agentKey = request.headers.get("x-agent-key") || "";
 
     try {
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });

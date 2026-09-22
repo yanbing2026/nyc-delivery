@@ -154,6 +154,7 @@ check("前端传的假金额被无视（自取按 30.38 收）", fake.data.order
 console.log("== 5. 店里设备取单 / 回写 ==");
 check("没 key 取单 → 403", (await call("/api/agent/pending")).status === 403);
 check("key 错 → 403", (await call("/api/agent/pending", { headers: { "x-agent-key": "wrong" } })).status === 403);
+check("key 走 ?key= → 403（只认 header）", (await call("/api/agent/pending?key=test-key")).status === 403);
 const p1 = await agent("/api/agent/pending");
 check("取到最早那一单", p1.data.order && p1.data.order.no === o.no, p1.data.order);
 check("取走后状态变 taken", (await call("/api/agent/orders")).status === 403 || true);   // 下面用带 key 的查
