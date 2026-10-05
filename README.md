@@ -3,7 +3,7 @@
 不经过微信公众号的普通点单网站：顾客户端下单 → 云端排队 → 店里安卓设备拉单 → 蓝牙热敏打印机出票 → 本地记账/对账。
 
 ```
-顾客手机 ──> docs/（静态站，Cloudflare/GitHub Pages，只收集地址/显示金额）
+顾客手机 ──> docs/（静态站，Cloudflare Pages，只收集地址/显示金额）
                 │ POST /api/order
                 ▼
           worker/（Cloudflare Worker + D1，免费档，不休眠）
@@ -17,7 +17,7 @@
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
 | `worker/src/index.js` | Worker 路由：`/api/config`、`/api/quote`、`/api/autocomplete`、`/api/order`、**`/api/lookup`（老客取回，只凭手机号）**、`/api/agent/*`（取单/回写）、`/api/report/*`、`/api/pos/publish` |
-| `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key。店名/电话/菜单全从后端读（内容来自 TabPOS 的发布） | 推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs`，站点根就是它 |
+| `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额：地址候选走 Worker 的 `/api/autocomplete`，报价走 Worker 的 `/api/quote`，自己不算钱、也不需要任何 key。店名/电话/菜单全从后端读（内容来自 TabPOS 的发布） | 发布：`npx wrangler pages deploy docs --project-name nycdelivery --branch main`（Cloudflare Pages，站点根就是它） |
 | `docs/order.html` | 老链接的跳转页（转到 `./`），之前发出去的 `/order.html` 不会失效 | — |
 | `worker/` | **线上后端**：下单/取单/回写/日报汇总。Cloudflare Worker + D1，免费档 10 万请求/天 | 见 `worker/README.md`（4 条 wrangler 命令） |
 | `backend/` | 本地参考后端（Python 标准库零依赖）：同一套业务逻辑，方便没网/没账号时跑通全流程，也能当自托管方案 | `cd backend && sh run.sh 8899` → http://127.0.0.1:8899/order |
@@ -98,6 +98,6 @@ Worker + D1（settings 表里的 shop / menu / pos 三行 = 网站的唯一真�
 
 ## 需要你自己准备的凭据
 
-- Cloudflare 账号（Workers + D1 免费档，`worker/README.md` 里的 4 条命令）
-- 一个域名（可选，Pages 的 `*.github.io` 也能用；正式接单建议自定义域名）
+- Cloudflare 账号（Pages 前端 + Workers + D1 免费档，`worker/README.md` 里的 4 条命令）
+- 一个域名（可选，Pages 的 `*.pages.dev` 也能用；正式接单建议自定义域名）
 - TabPOS 构建：Android SDK + 签名（本仓库不含 APK）
