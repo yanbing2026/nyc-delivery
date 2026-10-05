@@ -1,4 +1,4 @@
-# 点单页 + 店员后台（静态版，托管在 GitHub Pages）
+# 点单页 + 店员后台（静态版，托管在 Cloudflare Pages）
 
 纯前端的静态站，跟后端共用同一套规则（`wxmenu.js` 与 `menu_spec.py` / `receipt.py` 输出逐字符一致，由 `test-wxmenu.js` 交叉验证）。
 

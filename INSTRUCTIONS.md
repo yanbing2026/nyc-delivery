@@ -8,8 +8,8 @@
 ## 一、谁是谁
 
 ```
-顾客手机 ──> 点单网站（静态页，GitHub Pages）
-              https://yanbing2026.github.io/nyc-delivery/
+顾客手机 ──> 点单网站（静态页，Cloudflare Pages）
+              https://nycdelivery.pages.dev/
                     │  POST /api/order            下单
                     ▼
         Cloudflare Worker + D1（云端）
@@ -38,7 +38,7 @@
    ⚠️ **必须先选打印机**：没选时 App 故意不取单（取了打不出来就是漏单）
 3. **填站点信息**：菜单管理页（Manage Menu）顶部 **Online ordering site** 卡片
    - **Site URL**：`https://nyc-delivery-orders.yanbing2004.workers.dev`（末尾不加 `/` 也行）
-     别填成 `github.io` 那个——那是给顾客看的网页，不是后端
+     别填成 `nycdelivery.pages.dev` 那个——那是给顾客看的网页，不是后端
    - **Publish key**：Worker 的口令（= 取单口令）。在电脑上查看：
      ```
      grep -m1 '^NYC_DELIVERY_AGENT_KEY=' ~/.hermes/profiles/oc/.env
@@ -134,8 +134,9 @@
 
 **网站 + 云端**：`github.com/yanbing2026/nyc-delivery`（分支 `main`）
 ```
-./run_tests.sh          # 6 个套件 264 项：后端、里程/配送费、点单页、Worker 全链路
-cd worker && npx wrangler deploy      # 部署后端
+./run_tests.sh          # 6 个套件：后端、里程/配送费、点单页、Worker 全链路（项数以实跑输出为准）
+npx wrangler pages deploy docs --project-name nycdelivery --branch main   # 部署点单网站（Cloudflare Pages）
+cd worker && npx wrangler deploy                                          # 部署后端 Worker
 ```
 
 **App**：`github.com/yanbing2026/TabPOS`（分支 `feat/online-ordering-site`）
