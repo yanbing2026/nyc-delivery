@@ -339,6 +339,74 @@ export default {
         return json({ ok: true, config: next, shop, menu });
       }
 
+      // ---- 远程控制通道（云端驱动店里设备）与状态快照 ----
+      if (p === "/api/pos/command" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        const allow = ["set_setting", "publish_menu", "ping"];
+        if (!allow.includes(b.cmd))
+          return json({ ok: false, error: "不认识的命令" }, 400);
+        const id = orderNo();
+        const args = typeof b.args === "object" && b.args !== null ? JSON.stringify(b.args)
+          : (typeof b.args === "string" && b.args.trim() ? b.args : "{}");
+        await env.DB.prepare(
+          "INSERT INTO commands (id, created_at, cmd, args, status) VALUES (?1, ?2, ?3, ?4, 'queued')"
+        ).bind(id, nowISO(), b.cmd, args).run();
+        return json({ ok: true, id });
+      }
+
+      if (p === "/api/pos/command") {
+        const lim = Math.max(1, Math.min(Number(url.searchParams.get("limit") || 20) || 20, 100));
+        const rs = await env.DB.prepare(
+          "SELECT * FROM commands ORDER BY created_at DESC, id DESC LIMIT ?1"
+        ).bind(lim).all();
+        const commands = (rs.results || []).map((r) => {
+          let args = {};
+          try {
+            const v = JSON.parse(r.args || "{}");
+            if (typeof v === "object" && v !== null) args = v;
+          } catch {}
+          return { ...r, args };
+        });
+        return json({ ok: true, commands });
+      }
+
+      if (p === "/api/agent/command" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        if (b.status !== "done" && b.status !== "failed")
+          return json({ ok: false, error: "status 必须是 done 或 failed" }, 400);
+        const resStr = b.result != null ? (typeof b.result === "object" ? JSON.stringify(b.result) : String(b.result)) : null;
+        await env.DB.prepare(
+          "UPDATE commands SET status = ?1, result = ?2, updated_at = ?3 WHERE id = ?4"
+        ).bind(b.status, resStr, nowISO(), String(b.id || "")).run();
+        return json({ ok: true });
+      }
+
+      if (p === "/api/agent/command") {
+        const row = await env.DB.prepare(
+          "UPDATE commands SET status='sent', updated_at=?1 WHERE id=(SELECT id FROM commands WHERE status='queued' ORDER BY created_at LIMIT 1) RETURNING *"
+        ).bind(nowISO()).first();
+        if (!row) return json({ ok: true, command: null });
+        let args = {};
+        try {
+          const v = JSON.parse(row.args || "{}");
+          if (typeof v === "object" && v !== null) args = v;
+        } catch {}
+        return json({ ok: true, command: { id: row.id, cmd: row.cmd, args } });
+      }
+
+      if (p === "/api/agent/state" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        await saveRow(env, "agent_state", b);
+        return json({ ok: true });
+      }
+
+      if (p === "/api/pos/state") {
+        let state = null;
+        try { state = await getRow(env, "agent_state"); } catch {}
+        if (typeof state !== "object" || state === null) state = null;
+        return json({ ok: true, state });
+      }
+
       return json({ ok: false, error: "没有这个接口：" + p }, 404);
     } catch (e) {
       return json({ ok: false, error: `${e.name}: ${e.message}` }, 500);

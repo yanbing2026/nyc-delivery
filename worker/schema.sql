@@ -58,3 +58,6 @@ INSERT INTO settings (key, value) VALUES ('delivery', '{
 DROP TABLE IF EXISTS hits;
 CREATE TABLE hits (ip TEXT NOT NULL, ts INTEGER NOT NULL);
 CREATE INDEX idx_hits ON hits(ip, ts);
+
+CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, created_at TEXT, cmd TEXT, args TEXT, status TEXT, result TEXT, updated_at TEXT);
+
