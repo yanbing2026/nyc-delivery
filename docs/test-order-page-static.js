@@ -51,6 +51,7 @@ const MENU_STUB = [
   { name: '桩分类二', items: [{ id: 's3', name: '桩菜丙', en: 'Stub C', desc: '', price: 20 }] },
 ];
 const calls = [];
+let lastOrderBody = null;
 const money2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 globalThis.fetch = async (u, opts) => {
   const url = String(u);
@@ -102,7 +103,8 @@ globalThis.fetch = async (u, opts) => {
       ok: true, total: money2(subtotal + tax + tip + fee) });
   }
   if (url.startsWith(BACKEND + '/api/order')) {
-    const body = JSON.parse(arguments[1] && arguments[1].body ? arguments[1].body : '{}');
+    const body = JSON.parse((opts && opts.body) || (arguments[1] && arguments[1].body) || '{}');
+    lastOrderBody = body;
     return reply({ ok: true, order: { no: '260916000000001', created_at: '2026-09-16 01:00:00',
       customer: body.customer, phone: body.phone, address: '',
       items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: 0,
@@ -186,6 +188,10 @@ globalThis.fetch = async (u, opts) => {
   await T.submit();
   await sleep(50);
   check('订单发到了后端 /api/order', calls.some((c) => c.includes('/api/order')), calls.slice(-2));
+  check('订单每道菜都带菜单中的非空 id',
+    Array.isArray(lastOrderBody && lastOrderBody.items) && lastOrderBody.items.length > 0 &&
+    lastOrderBody.items.every((it) => it.id && MENU_STUB.some((g) => g.items.some((m) => m.id === it.id))),
+    JSON.stringify(lastOrderBody && lastOrderBody.items));
   check('接单页弹出', els['done']._cls.has('show'), [...els['done']._cls]);
   check('小票标明到店自取', els['doneRcpt'].textContent.includes('到店自取'), els['doneRcpt'].textContent.replace(/\n/g, ' | ').slice(0, 200));
   check('小票含税/小费', ['税', '小费'].every((k) => els['doneRcpt'].textContent.includes(k)), els['doneRcpt'].textContent.slice(0, 120));
