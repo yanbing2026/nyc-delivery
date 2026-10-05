@@ -373,6 +373,69 @@ check("预检 OPTIONS 返回 204 + CORS 头", pre.status === 204 && pre.headers.
 const withCors = await call("/api/health");
 check("普通响应也带 CORS（跨域前端能读）", true);
 
+console.log("== 11. 远程控制通道（云端驱动店里设备） ==");
+const stateBefore = (await agent("/api/pos/state")).data;
+check("reading before any push returns null", stateBefore.ok === true && stateBefore.state === null, stateBefore);
+
+const qPing = await agent("/api/pos/command", { method: "POST", body: { cmd: "ping", args: { echo: "hello" } } });
+check("queue a ping with the key → ok + id", qPing.data.ok === true && typeof qPing.data.id === "string" && qPing.data.id.length > 0, qPing.data);
+const pingId = qPing.data.id;
+
+const gotCmd = (await agent("/api/agent/command")).data;
+check("GET /api/agent/command returns that command with its args",
+  gotCmd.ok === true && gotCmd.command?.id === pingId && gotCmd.command?.cmd === "ping" && gotCmd.command?.args?.echo === "hello",
+  gotCmd);
+
+const gotCmd2 = (await agent("/api/agent/command")).data;
+check("calling it a second time returns null (no double delivery)",
+  gotCmd2.ok === true && gotCmd2.command === null,
+  gotCmd2);
+
+const ackRes = await agent("/api/agent/command", { method: "POST", body: { id: pingId, status: "done", result: { pong: 1 } } });
+check("ack it done", ackRes.data.ok === true, ackRes.data);
+
+const hist = (await agent("/api/pos/command")).data;
+check("GET /api/pos/command shows status done",
+  hist.ok === true && Array.isArray(hist.commands) && hist.commands.some((c) => c.id === pingId && c.status === "done"),
+  hist);
+
+const badCmd = await agent("/api/pos/command", { method: "POST", body: { cmd: "restart" } });
+check("unknown cmd → 400", badCmd.status === 400 && badCmd.data.ok === false && badCmd.data.error === "不认识的命令", badCmd.data);
+
+const badAck = await agent("/api/agent/command", { method: "POST", body: { id: pingId, status: "pending" } });
+check("ack with invalid status → 400", badAck.status === 400 && badAck.data.ok === false, badAck.data);
+
+const noKeyRoutes = [
+  await call("/api/pos/command", { method: "POST", body: { cmd: "ping" } }),
+  await call("/api/pos/command"),
+  await call("/api/agent/command"),
+  await call("/api/agent/command", { method: "POST", body: { id: pingId, status: "done" } }),
+  await call("/api/agent/state", { method: "POST", body: { app: "TabPOS" } }),
+  await call("/api/pos/state"),
+];
+const noKeyOk = noKeyRoutes.every((r) => r.status === 403 && r.data.ok === false && r.data.error === "agent key 不对");
+check("each new route without a key → the file's existing rejection behaviour", noKeyOk, noKeyRoutes.map((r) => r.status));
+
+const pushRes = await agent("/api/agent/state", { method: "POST", body: { app: "TabPOS", battery: 100, printer: "connected" } });
+check("state push succeeds", pushRes.data.ok === true, pushRes.data);
+const stateAfter = (await agent("/api/pos/state")).data;
+check("state push then read back round-trips",
+  stateAfter.ok === true && stateAfter.state?.battery === 100 && stateAfter.state?.printer === "connected",
+  stateAfter);
+
+db.prepare("INSERT INTO settings (key, value) VALUES ('agent_state', 'invalid-json') ON CONFLICT(key) DO UPDATE SET value = 'invalid-json'").run();
+const unparseableState = (await agent("/api/pos/state")).data;
+check("unparseable state returns null", unparseableState.ok === true && unparseableState.state === null, unparseableState);
+
+db.prepare("INSERT INTO commands (id, created_at, cmd, args, status) VALUES ('bad-args', '2026-10-05 12:00:00', 'ping', 'invalid-json', 'queued')").run();
+const badArgsCmd = (await agent("/api/agent/command")).data;
+check("bad JSON args falls back to empty object", badArgsCmd.ok === true && badArgsCmd.command?.id === "bad-args" && Object.keys(badArgsCmd.command?.args || {}).length === 0, badArgsCmd);
+
+const histLimit = (await agent("/api/pos/command?limit=1")).data;
+check("GET /api/pos/command?limit= respects limit", histLimit.ok === true && histLimit.commands.length === 1, histLimit);
+
+
+
 console.log();
 if (fails) { console.log("❌ " + fails + " 项失败"); process.exit(1); }
 console.log("✅ Worker 全链路通过（真实 SQL + 真实纽约地址/路线接口）");
