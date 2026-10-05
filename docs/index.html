@@ -243,7 +243,7 @@ function renderMenu(){
     });
   });
 }
-const items=()=>{const o=[];MENU.forEach(g=>g.items.forEach(it=>{const q=cart[it.id]||0;if(q)o.push({name:it.name,qty:q,price:it.price})}));return o};
+const items=()=>{const o=[];MENU.forEach(g=>g.items.forEach(it=>{const q=cart[it.id]||0;if(q)o.push({id:it.id,name:it.name,qty:q,price:it.price})}));return o};
 
 let qSeq=0;
 async function refresh(){
