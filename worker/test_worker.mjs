@@ -132,9 +132,14 @@ check("9.5 英里 → $10（超出 4.5 英里 → 按 5 英里计，不再拒单
 // 所以原来"两边公式对拍"的那几条已经没有对拍对象了。
 
 console.log("== 4. 下单（金额服务端重算） ==");
-const bad = await call("/api/order", { method: "POST", body: { items: MENU } });
+const noCust = await call("/api/order", { method: "POST", body: { items: MENU } });
+check("完全不填姓名电话 → 400 且提示姓名", noCust.status === 400 && /姓名/.test(noCust.data.error || ""), noCust.data.error);
+const noPhone = await call("/api/order", { method: "POST", body: { items: MENU, customer: "张先生" } });
+check("有姓名没电话 → 400 且提示手机号", noPhone.status === 400 && /手机号/.test(noPhone.data.error || ""), noPhone.data.error);
+
+const bad = await call("/api/order", { method: "POST", body: { items: MENU, customer: "张先生", phone: "917-555-0123" } });
 check("不填地址 → 拒单", bad.status === 400 && /英文街名|地址/.test(bad.data.error), bad.data.error);
-const low = await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 1 }], address: "59-04 99th St, Corona, NY 11368" } });
+const low = await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 1 }], address: "59-04 99th St, Corona, NY 11368", customer: "张先生", phone: "917-555-0123" } });
 check("未到起送价 → 拒单", low.status === 400 && /起送/.test(low.data.error), low.data.error);
 const created = await call("/api/order", { method: "POST", body: {
   items: MENU, address: "59-04 99th St, Corona, NY 11368", customer: "张先生", phone: "917-555-0123",
@@ -142,13 +147,20 @@ const created = await call("/api/order", { method: "POST", body: {
 check("正常下单成功", created.data.ok, created.data.error);
 const o = created.data.order;
 check("订单号是 15 位", /^\d{15}$/.test(o.no), o.no);
+const ny = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit",
+  day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date())
+  .reduce((o, p) => (o[p.type] = p.value, o), {});
+const nyHour = `${ny.year}-${ny.month}-${ny.day} ${ny.hour}`;
+const utcHour = new Date().toISOString().replace("T", " ").slice(0, 13);
+check("created_at 是纽约时间（EDT/EST）不是 UTC",
+  o.created_at.slice(0, 13) === nyHour && o.created_at.slice(0, 13) !== utcHour, [o.created_at, nyHour, utcHour]);
 check("服务端重算金额：小计 27.90 / 税 2.48 / 小费 5.02 固定，配送费按里程、合计自洽",
   o.subtotal === 27.9 && o.tax === 2.48 && o.tip === 5.02 &&
   o.delivery_fee === expectFee(o.distance_miles) && o.total === round2(o.subtotal + o.tax + o.tip + o.delivery_fee), o);
 check("订单带距离和预计送达", o.distance_miles > 0 && o.distance_miles <= 8 && o.eta_minutes > 0, [o.distance_miles, o.eta_minutes]);
-check("地址是解析后的标准地址（送餐员能看）", /99TH ST/i.test(o.address), o.address);
+check("地址是解析后的标准地址（送餐员能看）", /99(TH)? (ST|STREET)/i.test(o.address), o.address);
 const fake = await call("/api/order", { method: "POST", body: {
-  items: MENU, address: "59-04 99th St, Corona, NY 11368", pickup: true, total: 0.01, subtotal: 0.01 } });
+  items: MENU, address: "59-04 99th St, Corona, NY 11368", pickup: true, total: 0.01, subtotal: 0.01, customer: "张先生", phone: "917-555-0123" } });
 check("前端传的假金额被无视（自取按 30.38 收）", fake.data.order.total === 30.38, fake.data.order.total);
 
 console.log("== 5. 店里设备取单 / 回写 ==");
@@ -168,7 +180,7 @@ const dn = await agent("/api/agent/status", { method: "POST", body: { id: o.no, 
 check("回写完成 + 骑手实收现金 40", dn.data.order.status === "done" && dn.data.order.cash_collected === 40, dn.data.order);
 
 console.log("== 6. 日报汇总（店里 App 对账用） ==");
-await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true } });
+await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true, customer: "张先生", phone: "917-555-0123" } });
 // 把还没结束的单都走完（模拟店里 App：打印→完成→登记实收现金）
 const open = (await agent("/api/agent/orders?limit=50")).data.orders.filter((x) => x.status !== "done");
 for (const x of open) {
@@ -176,6 +188,7 @@ for (const x of open) {
   await agent("/api/agent/status", { method: "POST", body: { id: x.no, status: "done", cash_collected: x.total } });
 }
 const rep = (await agent("/api/report/summary")).data;
+check("日报默认日期是纽约的今天", rep.from === nyHour.slice(0, 10), [rep.from, nyHour]);
 check("汇总能拿到", rep.ok && rep.summary, rep);
 check("3 单全部完成：外卖 1 / 自取 2", rep.summary.fulfilled === 3 && rep.summary.delivery_orders === 1 && rep.summary.pickup_orders === 2, rep.summary);
 check("金额自洽：营业额 = 小计 + 税 + 小费 + 配送费",
@@ -300,16 +313,16 @@ check("税率/小费档位也跟着 App 走",
   [cfgP.config.tax_rate, cfgP.config.tip_options]);
 check("配置里带「最后一次发布」的时间和设备", !!(cfgP.pos && cfgP.pos.at && cfgP.pos.device === "柜台平板"), cfgP.pos);
 
-const forged = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", name: "测试菜一", qty: 1, price: 0.01 }], address: "59-04 99th St, Corona, NY 11368" } })).data;
+const forged = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", name: "测试菜一", qty: 1, price: 0.01 }], address: "59-04 99th St, Corona, NY 11368", customer: "张先生", phone: "917-555-0123" } })).data;
 check("伪造的价格不作数（按菜单价 11.5 → 未到起送价被挡）", forged.ok === false && /起送/.test(forged.error || ""), forged.error);
-const soldOut = (await call("/api/order", { method: "POST", body: { items: [{ id: "p2", qty: 1 }], address: "59-04 99th St, Corona, NY 11368" } })).data;
+const soldOut = (await call("/api/order", { method: "POST", body: { items: [{ id: "p2", qty: 1 }], address: "59-04 99th St, Corona, NY 11368", customer: "张先生", phone: "917-555-0123" } })).data;
 check("售完的菜下不了单", soldOut.ok === false && /售完/.test(soldOut.error || ""), soldOut.error);
-const gone = (await call("/api/order", { method: "POST", body: { items: [{ id: "nope", qty: 1 }], address: "59-04 99th St, Corona, NY 11368" } })).data;
+const gone = (await call("/api/order", { method: "POST", body: { items: [{ id: "nope", qty: 1 }], address: "59-04 99th St, Corona, NY 11368", customer: "张先生", phone: "917-555-0123" } })).data;
 check("已下架的菜下不了单", gone.ok === false && /下架/.test(gone.error || ""), gone.error);
 // 内部用的菜：菜单里没有，但可能有人拿着旧页面提交 —— 必须挡住
-const internal = (await call("/api/order", { method: "POST", body: { items: [{ id: "p5", qty: 1 }], pickup: true } })).data;
+const internal = (await call("/api/order", { method: "POST", body: { items: [{ id: "p5", qty: 1 }], pickup: true, customer: "张先生", phone: "917-555-0123" } })).data;
 check("内部用的菜下不了单（只在店里卖）", internal.ok === false && /店里/.test(internal.error || ""), internal.error);
-const good = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", qty: 2 }, { id: "p3", qty: 1 }], pickup: true } })).data;
+const good = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", qty: 2 }, { id: "p3", qty: 1 }], pickup: true, customer: "张先生", phone: "917-555-0123" } })).data;
 check("正常下单：金额按菜单价算（11.5×2 + 3 = 26）", good.ok && good.order.subtotal === 26, good.order && good.order.subtotal);
 const badAddr2 = (await agent("/api/pos/publish", { method: "POST", body: {
   shop: { companyAddress: "乱写的地址" }, items: [{ id: "z1", name: "z", price: 1, category: "x" }] } })).data;
@@ -325,7 +338,7 @@ check("测试数据已还原（后面的用例还要用默认菜单）",
 
 console.log("== 8. 限流（同一 IP 一小时 20 单） ==");
 for (let i = 0; i < 20; i++) db.prepare("INSERT INTO hits (ip, ts) VALUES (?, ?)").run("local", Math.floor(Date.now() / 1000));
-const rl = await call("/api/order", { method: "POST", body: { items: MENU, pickup: true } });
+const rl = await call("/api/order", { method: "POST", body: { items: MENU, pickup: true, customer: "张先生", phone: "917-555-0123" } });
 check("刷单被挡 429", rl.status === 429 && /太频繁/.test(rl.data.error), rl.data.error);
 
 console.log("== 9. 老客取回（/api/lookup，只凭手机号） ==");

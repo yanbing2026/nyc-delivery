@@ -2,6 +2,7 @@
 """极简 JSON 存储：配置 / 订单 / 事件日志，带线程锁。"""
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import os
 import threading
@@ -146,8 +147,8 @@ def add_job(job: dict) -> dict:
     """打印队列：蓝牙/离线打印机靠现场设备来取，服务器只负责排队。"""
     with _lock:
         all_j = load("jobs.json", [])
-        jid = time.strftime("%y%m%d%H%M%S") + "-" + str(len(all_j) + 1)
-        rec = {"id": jid, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        jid = datetime.now(delivery.NY_TZ).strftime("%y%m%d%H%M%S") + "-" + str(len(all_j) + 1)
+        rec = {"id": jid, "created_at": delivery.now_str(),
                "status": "pending", "taken_at": "", "done_at": "", "error": ""}
         rec.update(job)
         all_j.insert(0, rec)
@@ -186,7 +187,7 @@ def update_job(jid: str, **fields) -> dict | None:
 def log_event(kind: str, payload) -> None:
     with _lock:
         logs = load("events.json", [])
-        logs.insert(0, {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind, "payload": payload})
+        logs.insert(0, {"at": delivery.now_str(), "kind": kind, "payload": payload})
         save("events.json", logs[:200])
 
 

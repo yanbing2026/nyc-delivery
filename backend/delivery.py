@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import math
 import os
@@ -21,6 +22,14 @@ import time
 import urllib.parse
 import urllib.request
 from decimal import Decimal, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
+
+NY_TZ = ZoneInfo("America/New_York")   # 纽约时间：EDT/EST 自动切；别用机器本地时区
+
+
+def now_str() -> str:
+    """订单/小票/日志的时间戳统一走这里（纽约时间）。"""
+    return datetime.now(NY_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search"
 GEOSEARCH_AC = "https://geosearch.planninglabs.nyc/v2/autocomplete"
@@ -269,7 +278,7 @@ def quote(restaurant: dict, addr_query: str, subtotal: float, cfg: dict,
     out = {"subtotal": round(float(subtotal or 0), 2), "pickup": bool(pickup),
            "tax_rate": float(cfg.get("tax_rate") or 0),
            "min_order": float(cfg.get("min_order") or 0),
-           "quote_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+           "quote_at": now_str()}
     if pickup:
         out["distance"] = None
         out["delivery"] = {"ok": True, "fee": 0.0, "miles": 0, "tier": "到店自取"}

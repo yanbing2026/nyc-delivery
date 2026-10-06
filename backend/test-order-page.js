@@ -127,6 +127,15 @@ async function up() {
     check('小票预览会含小费行', true);
 
     console.log('== 5. 提交下单（真下单 → 真出小票） ==');
+    els['cust'].value = '';
+    els['phone'].value = '';
+    await T.submit();
+    await sleep(50);
+    check('姓名/电话为空时点下单 → 不发单、页面有提示',
+      els['msgs'].innerHTML.includes('姓名') && !els['done']._cls.has('show'),
+      els['msgs'].innerHTML);
+    els['msgs'].innerHTML = '';
+
     els['cust'].value = '张先生';
     els['phone'].value = '917-555-0123';
     els['remark'].value = '多给筷子，不要辣';

@@ -95,8 +95,8 @@ summary{font-size:14px;color:var(--dim)}
     <div id="rlast"></div>
   </div>
 
-  <label>姓名</label><input id="cust" placeholder="例：张先生 / Mr. Zhang">
-  <label>电话</label><input id="phone" type="tel" placeholder="917-555-0123">
+  <label>姓名 *</label><input id="cust" placeholder="例：张先生 / Mr. Zhang" required aria-required="true">
+  <label>电话 *</label><input id="phone" type="tel" placeholder="917-555-0123" required aria-required="true">
   <label>备注</label><textarea id="remark" rows="2"></textarea>
   <label>小费</label><div class="tips" id="tips"></div>
   <label>支付方式</label>
@@ -280,6 +280,10 @@ function rows(q,sub){
 }
 
 $('submit').onclick=async()=>{
+  if(!$('cust').value.trim() || $('phone').value.replace(/\D/g,'').length<10){
+    $('msgs').innerHTML='<div class="msg err">请填姓名和电话（电话至少 10 位数字），不然店里没法联系你。</div>';
+    return;
+  }
   $('submit').disabled=true; $('submit').textContent='提交中…';
   const body={items:items(),pickup:true,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
     remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:(cfg&&cfg.payment&&cfg.payment[0])||PAY_DEFAULT,

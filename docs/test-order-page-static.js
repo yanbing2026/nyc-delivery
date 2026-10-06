@@ -184,6 +184,13 @@ globalThis.fetch = async (u, opts) => {
   check('18% 小费由后端加进合计', T.Q.tip > 0 && T.Q.total > beforeTip, [T.Q.tip, T.Q.total]);
 
   console.log('== 4. 下单（真发到后端） ==');
+  els['cust'].value = ''; els['phone'].value = '';
+  calls.length = 0;
+  await T.submit();
+  await sleep(20);
+  check('姓名/电话为空时点下单 → 不发单', !calls.some((c) => c.includes('/api/order')), calls);
+  check('姓名/电话为空时页面有提示', els['msgs'].innerHTML.includes('姓名'), els['msgs'].innerHTML);
+
   els['cust'].value = '张先生'; els['phone'].value = '917-555-0123';
   await T.submit();
   await sleep(50);
