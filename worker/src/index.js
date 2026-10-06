@@ -14,16 +14,19 @@ const CORS = {
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj, null, 2), { status, headers: { ...JSON_HEADERS, ...CORS } });
 
-const nowISO = () => new Date().toISOString().replace("T", " ").slice(0, 19);
-const orderNo = () => {
-  const d = new Date();
-  const p = (n, w = 2) => String(n).padStart(w, "0");
-  return (
-    String(d.getUTCFullYear()).slice(2) + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) +
-    p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds()) +
-    String(Math.floor(Math.random() * 1000)).padStart(3, "0")
-  );
+// 时间一律纽约时间（EDT=UTC-4 / EST=UTC-5，按夏令时自动切），不要 UTC：
+// 用 UTC 时，当地晚上 8 点以后下的单会掉进第二天的日报。
+const TZ = "America/New_York";
+const NY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit",
+  day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+const stamp = (d = new Date()) => {
+  const p = {};
+  for (const x of NY_FMT.formatToParts(d)) p[x.type] = x.value;
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
 };
+const nowISO = () => stamp();
+const nyDay = (d = new Date()) => stamp(d).slice(0, 10);
+const orderNo = () => stamp().replace(/\D/g, "").slice(2) + String(Math.floor(Math.random() * 1000)).padStart(3, "0");
 
 async function getSettings(env) {
   const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'delivery'").first();
@@ -120,6 +123,10 @@ async function lookupCustomer(env, body, ip) {
 }
 
 async function createOrder(env, body, ip) {
+  const customer = String((body && body.customer) || "").trim();
+  const phone = String((body && body.phone) || "").trim();
+  if (!customer) return json({ ok: false, error: "请填姓名" }, 400);
+  if (phone.replace(/[^0-9]/g, "").length < 10) return json({ ok: false, error: "请填完整手机号（10 位以上数字）" }, 400);
   const asked = Array.isArray(body.items) ? body.items : [];
   if (!asked.length) return json({ ok: false, error: "购物车是空的" }, 400);
   const cfg = await getSettings(env);
@@ -153,8 +160,8 @@ async function createOrder(env, body, ip) {
     (id, created_at, source, customer, phone, address, borough, distance_miles, drive_minutes, eta_minutes,
      remark, items, subtotal, tax, tax_rate, tip, delivery_fee, total, pay_type, pickup, status, needs_manual_review)
     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,'pending',?21)`).bind(
-    id, nowISO(), String(body.source || "web").slice(0, 32), String(body.customer || "").slice(0, 60),
-    String(body.phone || "").slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
+    id, nowISO(), String(body.source || "web").slice(0, 32), customer.slice(0, 60),
+    phone.slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
     (q.address || {}).borough || "", (q.distance || {}).miles ?? null, (q.distance || {}).minutes ?? null,
     q.eta_minutes ?? null, String(body.remark || "").slice(0, 300), JSON.stringify(items.slice(0, 50)),
     q.subtotal, q.tax, q.tax_rate, q.tip, q.delivery_fee, q.total,
@@ -241,7 +248,7 @@ export default {
 
       // 设备同步用：拉一批订单（默认最近 30 天），记账在设备本地做
       if (p === "/api/agent/orders") {
-        const since = url.searchParams.get("since") || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19).replace("T", " ");
+        const since = url.searchParams.get("since") || stamp(new Date(Date.now() - 30 * 864e5));
         const lim = Math.min(Number(url.searchParams.get("limit") || 500), 2000);
         const rs = await env.DB.prepare(
           "SELECT * FROM orders WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2").bind(since, lim).all();
@@ -250,7 +257,7 @@ export default {
 
       if (p === "/api/report/summary") {
         // 店里 App 拿来做日报/月报对账（设备本地也会算一遍）
-        const from = url.searchParams.get("from") || new Date().toISOString().slice(0, 10);
+        const from = url.searchParams.get("from") || nyDay();
         const to = url.searchParams.get("to") || from;
         const r = await env.DB.prepare(`SELECT
             COUNT(*) AS orders,

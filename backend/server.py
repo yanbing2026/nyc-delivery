@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import os
 import re
@@ -64,11 +65,18 @@ def _width() -> int:
 
 
 def _next_order_no() -> str:
-    return time.strftime("%y%m%d%H%M%S") + str(int(time.time() * 1000) % 1000).zfill(3)
+    return datetime.now(delivery.NY_TZ).strftime("%y%m%d%H%M%S") + str(int(time.time() * 1000) % 1000).zfill(3)
 
 
 # ---------------------------------------------------------------- 业务
 def do_order(payload: dict) -> dict:
+    # 姓名/电话必填：店里靠电话联系顾客、出问题对单
+    customer = (payload.get("customer") or "").strip()
+    phone = (payload.get("phone") or "").strip()
+    if not customer:
+        return {"ok": False, "error": "请填姓名"}
+    if len(re.sub(r"\D", "", phone)) < 10:
+        return {"ok": False, "error": "请填完整手机号（10 位以上数字）"}
     cfg = store.config()
     items = payload.get("items") or []
     if not items:
@@ -78,9 +86,9 @@ def do_order(payload: dict) -> dict:
     tip_rate = float(payload.get("tip_rate") or 0)
     req = {
         "no": _next_order_no(),
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "customer": (payload.get("customer") or "").strip(),
-        "phone": (payload.get("phone") or "").strip(),
+        "created_at": delivery.now_str(),
+        "customer": customer,
+        "phone": phone,
         "openid": payload.get("openid") or "",
         "pickup": pickup,
         "remark": payload.get("remark") or "",
@@ -298,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
             if not job:
                 return self._json({"ok": True, "job": None, "msg": "没有待打印任务"})
             job = store.update_job(job["id"], status="taken",
-                                   taken_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+                                   taken_at=delivery.now_str())
             return self._json({"ok": True, "job": job})
         if p == "/api/events":
             return self._json({"events": store.events()})
@@ -364,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
             ok = bool(body.get("ok"))
             j = store.update_job(str(body.get("id", "")),
                                  status="done" if ok else "failed",
-                                 done_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                                 done_at=delivery.now_str(),
                                  error=str(body.get("error", ""))[:200])
             store.log_event("print_job", {"id": body.get("id"), "ok": ok,
                                           "error": body.get("error", "")})
