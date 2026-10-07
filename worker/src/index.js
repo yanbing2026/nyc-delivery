@@ -203,7 +203,8 @@ export default {
           restaurant_addr: cfg.restaurant_addr, restaurant: cfg.restaurant, max_miles: cfg.max_miles,
           min_order: cfg.min_order, tax_rate: cfg.tax_rate, tiers: cfg.tiers, free_miles: cfg.free_miles,
           per_mile_beyond: cfg.per_mile_beyond, prep_minutes: cfg.prep_minutes, tip_options: cfg.tip_options,
-          payment: cfg.payment, pickup: S.PICKUP_RULES } });
+          payment: cfg.payment,
+          pickup: { ...S.pickupPlan(nowISO()), day_offset: nowISO().slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 } } });
       }
       if (p === "/api/health") return json({ ok: true, at: nowISO() });
 

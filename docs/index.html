@@ -98,9 +98,13 @@ summary{font-size:14px;color:var(--dim)}
   <label>姓名 *</label><input id="cust" placeholder="例：张先生 / Mr. Zhang" required aria-required="true">
   <label>电话 *</label><input id="phone" type="tel" placeholder="917-555-0123" required aria-required="true">
   <label>备注</label><textarea id="remark" rows="2"></textarea>
+  <label>取餐时间 *</label>
+  <div class="hint" id="pickHint"></div>
+  <div class="tips" id="slots"></div>
   <label>小费</label><div class="tips" id="tips"></div>
   <label>支付方式</label>
-  <div class="cash">💵 现金 Cash（到店付）—— 目前只收现金，请备好零钱</div>
+  <div class="tips" id="pays"></div>
+  <div class="hint">到店付款；微信转账请转给店里，店里确认到账后小票才记「已付」。</div>
   <div id="msgs"></div>
   <div id="quote"></div>
 </div>
@@ -142,7 +146,7 @@ let MENU=[
 let SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 法拉盛 30 分钟送达'};
 // 运费一律由后端算；默认就指向线上 Worker，本地调试时用 localStorage('wxmenu_backend') 覆盖
 const DEFAULT_BACKEND='https://nyc-delivery-orders.yanbing2004.workers.dev';
-let cart={},pickup=true,tipRate=0,Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
+let cart={},pickup=true,tipRate=0,pickAt='',paySel='',Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
 // 缺字段一律显示 —（以前 Number(v||0) 会把 undefined 变成 $0.00，
 // 顾客看到"合计 $0.00"会以为页坏了）
 const money=v=>Number.isFinite(+v)?'$'+(+v).toFixed(2):'—';
@@ -152,7 +156,7 @@ const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
 async function boot(){
   $('shopName').textContent=SHOP.name;
   applyDevVisibility();
-  renderTips();renderMenu();
+  renderTips();renderMenu();renderSlots();renderPays();
   if(!backend){
     $('shopLine').textContent=`${SHOP.phone} · 暂时无法接单`;
     $('shopHint').innerHTML='未连接后端：运费由店里服务器计算，请在菜单编辑页填上后端地址';
@@ -211,13 +215,17 @@ async function reloadConfig(){
       setTimeout(()=>map.invalidateSize(),50);   // 视口异步变化后重算一次，保险
     };
     document.head.appendChild(ms);
-    $('shopLine').textContent=[SHOP.phone,'请提前24小时预约','现金支付','到店自取'].filter(Boolean).join(' · ');
+    $('shopLine').textContent=[SHOP.phone,'次日 14:00–20:00 到店自取','到店付款'].filter(Boolean).join(' · ');
     renderTips();
+    renderSlots();
+    renderPays();
     applyDevVisibility();
     $('shopHint').innerHTML=`✓ 店址：${cfg.restaurant_addr}<br>✓ 规则：${cfg.free_miles} 英里内免费 · 超出每英里 ${money(cfg.per_mile_beyond)}`
       +`${cfg.max_miles>0?` · 最远 ${cfg.max_miles} 英里`:' · 不设距离上限'}`;
   }catch(e){
     $('shopHint').innerHTML='⚠ 读不到后端配置：'+(e.message||e);
+    renderSlots();
+    renderPays();
   }
 }
 function msg(k,t){ $('msgs').innerHTML=`<div class="msg ${k}">${t}</div>` }
@@ -226,6 +234,55 @@ function renderTips(){
   $('tips').innerHTML=opts.map(r=>`<button class="${tipRate===r?'on':''}" onclick="setTip(${r})">${r*100}%</button>`).join('')
     +`<button class="${tipRate===0?'on':''}" onclick="setTip(0)">不给</button>`
     +`<button onclick="setTip(-1)">自定</button>`;
+}
+function renderSlots(){
+  const box=$('slots'), h=$('pickHint');
+  if(!box||!h) return;
+  box.innerHTML='';
+  if(!cfg||!cfg.pickup||!Array.isArray(cfg.pickup.slots)){
+    h.textContent='暂时读不到取餐时间，请稍后再试';
+    if($('submit')) $('submit').disabled=true;
+    return;
+  }
+  const p=cfg.pickup;
+  const dayText=p.day_offset===1?'明天':'后天';
+  h.textContent=`今晚 ${p.cutoff} 前下单 → ${dayText} ${p.start}–${p.end} 取；过了 ${p.cutoff} 就得再晚一天。`;
+  p.slots.forEach(s=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.textContent=s;
+    const target=`${p.day} ${s}`;
+    if(pickAt===target){
+      b.className='on';
+      b.classList.add('on');
+    }
+    b.onclick=()=>{
+      pickAt=target;
+      renderSlots();
+    };
+    box.appendChild(b);
+  });
+}
+function renderPays(){
+  const box=$('pays');
+  if(!box) return;
+  box.innerHTML='';
+  const list=(cfg&&Array.isArray(cfg.payment)&&cfg.payment.length)?cfg.payment:[];
+  if(list.length&&(!paySel||!list.includes(paySel))) paySel=list[0];
+  list.forEach(p=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.textContent=p;
+    if(paySel===p){
+      b.className='on';
+      b.classList.add('on');
+    }
+    b.onclick=()=>{
+      paySel=p;
+      renderPays();
+    };
+    box.appendChild(b);
+  });
 }
 function setTip(r){ if(r<0){tipRate=Math.min(0.5,Math.max(0,(parseFloat(prompt('小费百分比','20'))||0)/100));}else tipRate=r; renderTips(); refresh(); }
 function renderMenu(){
@@ -266,7 +323,7 @@ async function refresh(){
   const probs=[];
   if(q.ok===false) probs.push(['err',q.error]);
   $('msgs').innerHTML=probs.map(p=>`<div class="msg ${p[0]}">${p[1]}</div>`).join('');
-  $('submit').disabled=!q.ok||c===0;
+  $('submit').disabled=!q.ok||c===0||!cfg||!cfg.pickup;
   $('barHint').textContent=`${c} 件 · 到店自取`;
 }
 function rows(q,sub){
@@ -284,9 +341,10 @@ $('submit').onclick=async()=>{
     $('msgs').innerHTML='<div class="msg err">请填姓名和电话（电话至少 10 位数字），不然店里没法联系你。</div>';
     return;
   }
+  if(!pickAt){ $('msgs').innerHTML='<div class="msg err">请选择取餐时间</div>'; return; }
   $('submit').disabled=true; $('submit').textContent='提交中…';
   const body={items:items(),pickup:true,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
-    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:(cfg&&cfg.payment&&cfg.payment[0])||PAY_DEFAULT,
+    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pickup_at:pickAt,pay_type:paySel,
     address:'',source:'pages-delivery'};
   let order=null,printMsg='';
   if(!backend){
@@ -303,7 +361,7 @@ $('submit').onclick=async()=>{
     printMsg='（这家店还没接打印机：小票没出，请把订单号告诉店员。）';
   }
   $('doneNo').textContent='订单号 '+order.no;
-  $('doneMsg').textContent=`${printMsg} 请到店取餐，备好现金 ${money(order.total)}。`;
+  $('doneMsg').textContent=`${printMsg} 取餐时间 ${order.pickup_at}，付款方式 ${order.pay_type}（未付，到店付）。请到店取餐。`;
   $('doneRcpt').textContent=WXMenu.renderReceipt(order,{name:SHOP.name,slogan:SHOP.slogan,phone:SHOP.phone,footer:'谢谢惠顾|现金支付'},32);
   saveCustomer({name:body.customer,phone:body.phone});
   $('done').classList.add('show');

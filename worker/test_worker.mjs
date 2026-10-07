@@ -468,7 +468,9 @@ check("GET /api/pickup-slots → ok:true, slots.length === 13, slots[0] === '14:
 
 const cfgPickup = (await call("/api/config")).data;
 check("GET /api/config → config.pickup.cutoff === '22:00'",
-  cfgPickup.config?.pickup?.cutoff === "22:00",
+  cfgPickup.config?.pickup?.cutoff === "22:00" &&
+  cfgPickup.config?.pickup?.slots?.length === 13 &&
+  cfgPickup.config?.pickup?.slots?.[0] === "14:00",
   cfgPickup.config?.pickup);
 
 const noPick = await call("/api/order", { method: "POST", body: {
