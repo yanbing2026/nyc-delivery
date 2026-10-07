@@ -129,6 +129,7 @@
     if (order.pickup) L.push('** 到店自取 **');
     if (order.customer) L.push('顾客: ' + order.customer);
     if (order.phone) L.push('电话: ' + order.phone);
+    if (order.pickup && order.pickup_at) L.push('取餐时间: ' + order.pickup_at);
     if (order.address && !order.pickup) {
       L.push('-'.repeat(width));
       L.push('送餐地址:');
@@ -172,6 +173,7 @@
     L.push('-'.repeat(width));
     L.push(lr('合计', money(order.total != null ? order.total : sub), width));
     if (order.pay_type) L.push(lr('支付方式', order.pay_type, width));
+    L.push(lr('付款状态', order.paid ? '已付' : '未付', width));
     L.push('='.repeat(width));
     const footer = order.footer || shop.footer || '';
     for (const seg of String(footer).split('|')) if (seg) L.push(center(seg, width));
