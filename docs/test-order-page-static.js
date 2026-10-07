@@ -41,7 +41,11 @@ const BACKEND = 'https://shop-backend.test';
 localStorage.setItem('wxmenu_backend', BACKEND);
 const CFG = { enabled: true, free_miles: 5, tiers: [], per_mile_beyond: 2.0, max_miles: 0,
   min_order: 20.0, tax_rate: 0.08875, prep_minutes: 20, tip_options: [0.15, 0.18, 0.2],
-  payment: ['现金 Cash（送到付）'], restaurant_addr: '10-53 116th St, Flushing, NY 11356',
+  payment: ['现金 Cash', '微信转账 WeChat', '信用卡 Credit Card'],
+  pickup: { day: '2026-10-08', day_offset: 1, cutoff: '22:00', start: '14:00', end: '20:00',
+    step_minutes: 30, lead_days: 1,
+    slots: ['14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'] },
+  restaurant_addr: '10-53 116th St, Flushing, NY 11356',
   restaurant: { lat: 40.7873972, lon: -73.8511667 }, fallback_fee: 5.0 };
 const MILES = 5.56;                        // 固定里程，模拟后端 Google+OSRM 的结果
 const SHOP_STUB = { name: '桩小店', phone: '718-000-0000', slogan: '桩口号' };
@@ -109,7 +113,8 @@ globalThis.fetch = async (u, opts) => {
       customer: body.customer, phone: body.phone, address: '',
       items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: 0,
       total: money2(27.9 + 2.48 + money2(27.9 * 0.18)),
-      pay_type: CFG.payment[0], pickup: true, table: 12 },
+      pickup_at: body.pickup_at,
+      pay_type: body.pay_type || CFG.payment[0], pickup: true, table: 12 },
       print: { ok: true, driver: 'stub' } });
   }
   throw new Error('未打桩的请求：' + url);
@@ -126,6 +131,8 @@ globalThis.fetch = async (u, opts) => {
   eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,recall,prefillSaved,setTip,submit(){ $('submit').onclick(); },
     get cart(){return cart}, get MENU(){return MENU}, get SHOP(){return SHOP},
     get Q(){return Q}, get cfg(){return cfg}, get pickup(){return pickup},
+    get pickAt(){return pickAt}, set pickAt(v){pickAt=v},
+    get paySel(){return paySel}, set paySel(v){paySel=v},
     get count(){return count()}, get sub(){return subtotal()} };`);
   const T = globalThis.__T;
 
@@ -192,6 +199,7 @@ globalThis.fetch = async (u, opts) => {
   check('姓名/电话为空时页面有提示', els['msgs'].innerHTML.includes('姓名'), els['msgs'].innerHTML);
 
   els['cust'].value = '张先生'; els['phone'].value = '917-555-0123';
+  els['slots'].children[1].click();
   await T.submit();
   await sleep(50);
   check('订单发到了后端 /api/order', calls.some((c) => c.includes('/api/order')), calls.slice(-2));
@@ -207,6 +215,49 @@ globalThis.fetch = async (u, opts) => {
   check('提示打印结果来自后端', els['doneMsg'].textContent.includes('小票已打印'), els['doneMsg'].textContent);
 
   console.log('== 5. 合计栏不许出现假金额（后端没回来时显示小计） ==');
+
+  console.log('== 6. 取餐排期与付款方式 ==');
+  check('slots 容器渲染出 13 个按钮，第一个文本含 14:00、最后一个含 20:00',
+    (els['slots'].children || []).length === 13 &&
+    els['slots'].children[0].textContent.includes('14:00') &&
+    els['slots'].children[12].textContent.includes('20:00'),
+    (els['slots'].children || []).map((c) => c.textContent));
+
+  check('pickHint 文案里同时出现 22:00、14:00、20:00',
+    ['22:00', '14:00', '20:00'].every((k) => els['pickHint'].textContent.includes(k)),
+    els['pickHint'].textContent);
+
+  T.pickAt = '';
+  calls.length = 0;
+  await T.submit();
+  await sleep(20);
+  check('没点时间就下单 → 有「请选择取餐时间」提示，且没有发出 /api/order',
+    !calls.some((c) => c.includes('/api/order')) && els['msgs'].innerHTML.includes('请选择取餐时间'),
+    els['msgs'].innerHTML);
+
+  els['slots'].children[1].click();
+  calls.length = 0;
+  await T.submit();
+  await sleep(50);
+  check('点第 2 个 slot 后下单 → lastOrderBody.pickup_at === 2026-10-08 14:30',
+    lastOrderBody && lastOrderBody.pickup_at === '2026-10-08 14:30',
+    lastOrderBody && lastOrderBody.pickup_at);
+
+  const paysLenOk = (els['pays'].children || []).length === 3;
+  const pay0On = els['pays'].children[0] && (els['pays'].children[0]._cls.has('on') || els['pays'].children[0].classList.contains('on'));
+  els['pays'].children[2].click();
+  calls.length = 0;
+  await T.submit();
+  await sleep(50);
+  check('付款方式渲染出 3 个按钮，默认选中第一个；点第 3 个（信用卡）后下单 → lastOrderBody.pay_type === 信用卡 Credit Card',
+    paysLenOk && pay0On && lastOrderBody && lastOrderBody.pay_type === '信用卡 Credit Card',
+    lastOrderBody && lastOrderBody.pay_type);
+
+  check('成功页 doneMsg 里出现取餐时间 2026-10-08 14:30',
+    els['doneMsg'].textContent.includes('2026-10-08 14:30'),
+    els['doneMsg'].textContent);
+
+  els['pays'].children[0].click();
 
   console.log('== 7. 换菜单后购物车里的"幽灵菜"要被清掉 ==');
   els['menu'].children[1].querySelector('.plus').onclick();   // 真实存在的一道菜

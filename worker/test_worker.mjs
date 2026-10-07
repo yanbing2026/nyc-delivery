@@ -7,7 +7,16 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const W = await import("./src/delivery.js");            // Worker 版
+const S = await import("./src/schedule.js");
 const worker = (await import("./src/index.js")).default;
+
+const nyStamp = () => {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit",
+    day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date())) p[x.type] = x.value;
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+};
+const defaultPickupAt = () => `${S.pickupPlan(nyStamp()).day} 14:00`;
 
 let fails = 0;
 const check = (n, c, e) => { console.log((c ? "  ✓ " : "  ✗ ") + n + (c || e === undefined ? "" : "  ← " + JSON.stringify(e))); if (!c) fails++; };
@@ -160,7 +169,7 @@ check("服务端重算金额：小计 27.90 / 税 2.48 / 小费 5.02 固定，�
 check("订单带距离和预计送达", o.distance_miles > 0 && o.distance_miles <= 8 && o.eta_minutes > 0, [o.distance_miles, o.eta_minutes]);
 check("地址是解析后的标准地址（送餐员能看）", /99(TH)? (ST|STREET)/i.test(o.address), o.address);
 const fake = await call("/api/order", { method: "POST", body: {
-  items: MENU, address: "59-04 99th St, Corona, NY 11368", pickup: true, total: 0.01, subtotal: 0.01, customer: "张先生", phone: "917-555-0123" } });
+  items: MENU, address: "59-04 99th St, Corona, NY 11368", pickup: true, pickup_at: defaultPickupAt(), total: 0.01, subtotal: 0.01, customer: "张先生", phone: "917-555-0123" } });
 check("前端传的假金额被无视（自取按 30.38 收）", fake.data.order.total === 30.38, fake.data.order.total);
 
 console.log("== 5. 店里设备取单 / 回写 ==");
@@ -180,7 +189,7 @@ const dn = await agent("/api/agent/status", { method: "POST", body: { id: o.no, 
 check("回写完成 + 骑手实收现金 40", dn.data.order.status === "done" && dn.data.order.cash_collected === 40, dn.data.order);
 
 console.log("== 6. 日报汇总（店里 App 对账用） ==");
-await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true, customer: "张先生", phone: "917-555-0123" } });
+await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true, pickup_at: defaultPickupAt(), customer: "张先生", phone: "917-555-0123" } });
 // 把还没结束的单都走完（模拟店里 App：打印→完成→登记实收现金）
 const open = (await agent("/api/agent/orders?limit=50")).data.orders.filter((x) => x.status !== "done");
 for (const x of open) {
@@ -322,7 +331,7 @@ check("已下架的菜下不了单", gone.ok === false && /下架/.test(gone.err
 // 内部用的菜：菜单里没有，但可能有人拿着旧页面提交 —— 必须挡住
 const internal = (await call("/api/order", { method: "POST", body: { items: [{ id: "p5", qty: 1 }], pickup: true, customer: "张先生", phone: "917-555-0123" } })).data;
 check("内部用的菜下不了单（只在店里卖）", internal.ok === false && /店里/.test(internal.error || ""), internal.error);
-const good = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", qty: 2 }, { id: "p3", qty: 1 }], pickup: true, customer: "张先生", phone: "917-555-0123" } })).data;
+const good = (await call("/api/order", { method: "POST", body: { items: [{ id: "p1", qty: 2 }, { id: "p3", qty: 1 }], pickup: true, pickup_at: defaultPickupAt(), customer: "张先生", phone: "917-555-0123" } })).data;
 check("正常下单：金额按菜单价算（11.5×2 + 3 = 26）", good.ok && good.order.subtotal === 26, good.order && good.order.subtotal);
 const badAddr2 = (await agent("/api/pos/publish", { method: "POST", body: {
   shop: { companyAddress: "乱写的地址" }, items: [{ id: "z1", name: "z", price: 1, category: "x" }] } })).data;
@@ -347,7 +356,7 @@ console.log("== 9. 老客取回（/api/lookup，只凭手机号） ==");
   db.prepare("DELETE FROM hits").run();
   // 先下一单自取（不用地址，也就不依赖 Google key）
   const ok = await call("/api/order", { method: "POST", body: {
-    items: [{ id: MENU[0].id, qty: 2 }], pickup: true, customer: "张先生", phone: "(917) 555-0123", tip_rate: 0,
+    items: [{ id: MENU[0].id, qty: 2 }], pickup: true, pickup_at: defaultPickupAt(), customer: "张先生", phone: "(917) 555-0123", tip_rate: 0,
   }});
   check("测试单下成功", ok.data.ok === true, ok.data.error);
 
@@ -447,7 +456,62 @@ check("bad JSON args falls back to empty object", badArgsCmd.ok === true && badA
 const histLimit = (await agent("/api/pos/command?limit=1")).data;
 check("GET /api/pos/command?limit= respects limit", histLimit.ok === true && histLimit.commands.length === 1, histLimit);
 
+console.log("== 12. 取餐排期 + 付款方式 + 已付/未付 ==");
+const ps = (await call("/api/pickup-slots")).data;
+check("GET /api/pickup-slots → ok:true, slots.length === 13, slots[0] === '14:00', slots[12] === '20:00', day 比今天大, day_offset 是 1 或 2",
+  ps.ok === true &&
+  Array.isArray(ps.slots) && ps.slots.length === 13 &&
+  ps.slots[0] === "14:00" && ps.slots[12] === "20:00" &&
+  ps.day > ps.now.slice(0, 10) &&
+  (ps.day_offset === 1 || ps.day_offset === 2),
+  ps);
 
+const cfgPickup = (await call("/api/config")).data;
+check("GET /api/config → config.pickup.cutoff === '22:00'",
+  cfgPickup.config?.pickup?.cutoff === "22:00" &&
+  cfgPickup.config?.pickup?.slots?.length === 13 &&
+  cfgPickup.config?.pickup?.slots?.[0] === "14:00",
+  cfgPickup.config?.pickup);
+
+const noPick = await call("/api/order", { method: "POST", body: {
+  items: MENU, pickup: true, customer: "李先生", phone: "917-555-0123",
+}});
+check("自取下单不带 pickup_at → 400", noPick.status === 400 && noPick.data.ok === false, noPick.data);
+
+const badPick = await call("/api/order", { method: "POST", body: {
+  items: MENU, pickup: true, pickup_at: "1999-01-01 14:00", customer: "李先生", phone: "917-555-0123",
+}});
+check("自取下单带 pickup_at: '1999-01-01 14:00' → 400", badPick.status === 400 && badPick.data.ok === false, badPick.data);
+
+const targetDaySlot = `${ps.day} 14:00`;
+const goodPick = await call("/api/order", { method: "POST", body: {
+  items: MENU, pickup: true, pickup_at: targetDaySlot, customer: "李先生", phone: "917-555-0123",
+}});
+check("自取下单带 pickup_at: '<day> 14:00' → 200，且 order.pickup_at 等于传进去的值、order.paid === false",
+  goodPick.status === 200 &&
+  goodPick.data.ok === true &&
+  goodPick.data.order?.pickup_at === targetDaySlot &&
+  goodPick.data.order?.paid === false,
+  goodPick.data);
+
+const pickOrderId = goodPick.data.order.no;
+await agent("/api/agent/pending");
+const printedRes = await agent("/api/agent/status", { method: "POST", body: {
+  id: pickOrderId, status: "printed", paid: true,
+}});
+check("取单后 POST /api/agent/status 带 paid:true → order.paid === true 且 order.paid_at 非空",
+  printedRes.data.ok === true &&
+  printedRes.data.order?.paid === true &&
+  Boolean(printedRes.data.order?.paid_at),
+  printedRes.data);
+
+const doneRes = await agent("/api/agent/status", { method: "POST", body: {
+  id: pickOrderId, status: "done",
+}});
+check("再用 {id, status:'done'}（不带 paid）回写 → order.paid 仍然是 true",
+  doneRes.data.ok === true &&
+  doneRes.data.order?.paid === true,
+  doneRes.data);
 
 console.log();
 if (fails) { console.log("❌ " + fails + " 项失败"); process.exit(1); }

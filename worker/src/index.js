@@ -2,6 +2,7 @@
 // 契约：POST /api/order 下单 → GET /api/agent/pending 取单 → POST /api/agent/status 回写
 import * as D from "./delivery.js";
 import * as C from "./catalog.js";
+import * as S from "./schedule.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 // Pages 前端跟 Worker 不同源，必须给 CORS，否则顾客点「下单」会被浏览器拦
@@ -73,6 +74,7 @@ const publicOrder = (r) => ({
   remark: r.remark, items: JSON.parse(r.items || "[]"), subtotal: r.subtotal, tax: r.tax,
   tax_rate: r.tax_rate, tip: r.tip, delivery_fee: r.delivery_fee, total: r.total,
   pay_type: r.pay_type, pickup: !!r.pickup, needs_manual_review: !!r.needs_manual_review,
+  pickup_at: r.pickup_at, paid: !!r.paid, paid_at: r.paid_at,
   taken_at: r.taken_at, printed_at: r.printed_at, done_at: r.done_at, error: r.error,
   cash_collected: r.cash_collected,
 });
@@ -154,18 +156,28 @@ async function createOrder(env, body, ip) {
   if (!q.ok) return json({ ok: false, error: q.error, quote: q }, 400);
   if (await rateLimited(env, ip)) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
 
+  const stampNow = nowISO();
+  const pickupAt = pickup ? String(body.pickup_at || "").trim() : "";
+  if (pickup) {
+    if (!pickupAt) return json({ ok: false, error: "请选择取餐时间" }, 400);
+    if (!S.validPickup(pickupAt, stampNow))
+      return json({ ok: false, error: "取餐时间不在可选范围内，请重新选择" }, 400);
+  }
+
   const id = orderNo();
   const manual = !pickup && (q.distance || {}).ok === false;
+  const payList = Array.isArray(cfg.payment) && cfg.payment.length ? cfg.payment : ["现金 Cash"];
+  const payType = payList.includes(body.pay_type) ? String(body.pay_type) : payList[0];
   await env.DB.prepare(`INSERT INTO orders
     (id, created_at, source, customer, phone, address, borough, distance_miles, drive_minutes, eta_minutes,
-     remark, items, subtotal, tax, tax_rate, tip, delivery_fee, total, pay_type, pickup, status, needs_manual_review)
-    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,'pending',?21)`).bind(
-    id, nowISO(), String(body.source || "web").slice(0, 32), customer.slice(0, 60),
+     remark, items, subtotal, tax, tax_rate, tip, delivery_fee, total, pay_type, pickup_at, pickup, status, needs_manual_review)
+    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,'pending',?22)`).bind(
+    id, stampNow, String(body.source || "web").slice(0, 32), customer.slice(0, 60),
     phone.slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
     (q.address || {}).borough || "", (q.distance || {}).miles ?? null, (q.distance || {}).minutes ?? null,
     q.eta_minutes ?? null, String(body.remark || "").slice(0, 300), JSON.stringify(items.slice(0, 50)),
     q.subtotal, q.tax, q.tax_rate, q.tip, q.delivery_fee, q.total,
-    String(body.pay_type || cfg.payment[0]).slice(0, 40), pickup ? 1 : 0, manual ? 1 : 0
+    payType, pickupAt, pickup ? 1 : 0, manual ? 1 : 0
   ).run();
 
   const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
@@ -191,9 +203,16 @@ export default {
           restaurant_addr: cfg.restaurant_addr, restaurant: cfg.restaurant, max_miles: cfg.max_miles,
           min_order: cfg.min_order, tax_rate: cfg.tax_rate, tiers: cfg.tiers, free_miles: cfg.free_miles,
           per_mile_beyond: cfg.per_mile_beyond, prep_minutes: cfg.prep_minutes, tip_options: cfg.tip_options,
-          payment: cfg.payment } });
+          payment: cfg.payment,
+          pickup: { ...S.pickupPlan(nowISO()), day_offset: nowISO().slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 } } });
       }
       if (p === "/api/health") return json({ ok: true, at: nowISO() });
+
+      // 顾客页要的「可选哪天 / 哪些时间」
+      if (p === "/api/pickup-slots") {
+        const plan = S.pickupPlan(nowISO());
+        return json({ ok: true, now: nowISO(), ...plan, day_offset: nowISO().slice(11,16) < S.PICKUP_RULES.cutoff ? 1 : 2 });
+      }
 
       if (p === "/api/quote") {
         const cfg = await getSettings(env);
@@ -235,10 +254,13 @@ export default {
         const id = String(b.id || "");
         const err = String(b.error || "").slice(0, 300);
         const cash = b.cash_collected === undefined || b.cash_collected === null ? null : Number(b.cash_collected);
+        const paid = b.paid === undefined || b.paid === null ? null : (b.paid ? 1 : 0);
         const sets = ["status = ?1", "error = ?2", "cash_collected = ?3"];
         const args = [status, err, cash];
+        if (paid !== null) { args.push(paid); sets.push(`paid = ?${args.length}`); }
         if (status === "printed") { args.push(nowISO()); sets.push(`printed_at = ?${args.length}`); }
         if (status === "done") { args.push(nowISO()); sets.push(`done_at = ?${args.length}`); }
+        if (paid === 1) { args.push(nowISO()); sets.push(`paid_at = ?${args.length}`); }
         args.push(id);
         await env.DB.prepare(`UPDATE orders SET ${sets.join(", ")} WHERE id = ?${args.length}`)
           .bind(...args).run();

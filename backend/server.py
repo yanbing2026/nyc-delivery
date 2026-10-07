@@ -82,17 +82,32 @@ def do_order(payload: dict) -> dict:
     if not items:
         return {"ok": False, "error": "购物车是空的"}
     d = cfg.get("delivery", {})
+    if d.get("payment") == ["现金 Cash（送到付）"]:
+        d["payment"] = list(delivery.DEFAULT_DELIVERY["payment"])
     pickup = bool(payload.get("pickup"))
     tip_rate = float(payload.get("tip_rate") or 0)
+    now_stamp = delivery.now_str()
+    pickup_at = str(payload.get("pickup_at") or "").strip() if pickup else ""
+    if pickup:
+        if not pickup_at:
+            return {"ok": False, "error": "请选择取餐时间"}
+        if not delivery.valid_pickup(pickup_at, now_stamp, d):
+            return {"ok": False, "error": "取餐时间不在可选范围内，请重新选择"}
+    pay_list = d.get("payment") if isinstance(d.get("payment"), list) and d.get("payment") else ["现金 Cash"]
+    pay = payload.get("pay_type")
+    pay = pay if pay in pay_list else pay_list[0]
     req = {
         "no": _next_order_no(),
-        "created_at": delivery.now_str(),
+        "created_at": now_stamp,
         "customer": customer,
         "phone": phone,
         "openid": payload.get("openid") or "",
         "pickup": pickup,
+        "pickup_at": pickup_at,
+        "paid": False,
+        "paid_at": "",
         "remark": payload.get("remark") or "",
-        "pay_type": payload.get("pay_type") or "",
+        "pay_type": pay,
         "tip_rate": tip_rate,
         "items": [
             {"name": i.get("name", ""), "qty": int(i.get("qty", 1)),
@@ -248,10 +263,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._file(os.path.join(STATIC, safe))
         if p == "/wx":
             return self._wx_verify(q)
-        if p == "/api/state":
+        if p in ("/api/state", "/api/config"):
             cfg = store.config()
+            if cfg.get("delivery", {}).get("payment") == ["现金 Cash（送到付）"]:
+                cfg["delivery"]["payment"] = list(delivery.DEFAULT_DELIVERY["payment"])
+            plan = delivery.pickup_plan(delivery.now_str(), cfg.get("delivery", {}))
+            cfg.setdefault("delivery", {})["pickup"] = plan
+            cfg["pickup"] = plan
             return self._json({
+                "ok": True,
+                "shop": cfg.get("shop", {}),
                 "config": cfg,
+                "pickup": plan,
                 "menu": store.load("menu.json", menu_spec.default_menu(cfg.get("public_base", "") + "/order")),
                 "orders": store.orders()[:30],
                 "events": store.events()[:20],
@@ -259,6 +282,11 @@ class Handler(BaseHTTPRequestHandler):
                 "menu_types": sorted(menu_spec.VALID_TYPES),
                 "drivers": list(printers.DRIVERS),
             })
+        if p == "/api/pickup-slots":
+            cfg = store.config()
+            now = delivery.now_str()
+            plan = delivery.pickup_plan(now, cfg.get("delivery", {}))
+            return self._json({"ok": True, "now": now, **plan})
         if p == "/api/menu/preview":
             m = store.load("menu.json", menu_spec.default_menu())
             m = menu_spec.normalize(m)

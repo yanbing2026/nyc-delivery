@@ -23,6 +23,7 @@ import printers
 import receipt as R
 import store
 import wxapi
+from delivery import pickup_plan, now_str
 
 FAILS: list[str] = []
 
@@ -180,10 +181,31 @@ check("不带姓名/电话下单 → 拒单", code == 200 and no_c["ok"] is Fals
 code, no_p = url("/api/order", {"items": [{"name": "海蛎煎", "qty": 1, "price": 28.0}], "pickup": True, "customer": "张三"})
 check("只有姓名 → 拒单并提示手机号", code == 200 and no_p["ok"] is False and "手机号" in no_p.get("error", ""), no_p.get("error"))
 
+code, no_time = url("/api/order", {"items": [{"name": "海蛎煎", "qty": 1, "price": 28.0}],
+                                   "pickup": True, "customer": "张三", "phone": "917-555-0123"})
+check("自取下单不带 pickup_at → 被拒", code == 200 and no_time["ok"] is False and "取餐时间" in no_time.get("error", ""), no_time.get("error"))
+code, bad_time = url("/api/order", {"items": [{"name": "海蛎煎", "qty": 1, "price": 28.0}],
+                                    "pickup": True, "customer": "张三", "phone": "917-555-0123",
+                                    "pickup_at": "1999-01-01 14:00"})
+check("带非法 pickup_at → 被拒", code == 200 and bad_time["ok"] is False and "取餐时间" in bad_time.get("error", ""), bad_time.get("error"))
+
+code, cfg_resp = url("/api/config")
+cfg_obj = cfg_resp.get("config", {})
+p_plan = (cfg_obj.get("delivery") or {}).get("pickup") or cfg_resp.get("pickup", {})
+check("GET /api/config 含合法 pickup 排期",
+      code == 200 and len(p_plan.get("slots", [])) == 13 and
+      p_plan.get("slots", [])[0] == "14:00" and p_plan.get("cutoff") == "22:00",
+      p_plan)
+
+target_pickup = "%s 14:00" % pickup_plan(now_str())["day"]
 code, o = url("/api/order", {"items": [{"name": "海蛎煎", "qty": 2, "price": 28.0}],
                              "pickup": True, "customer": "张三", "phone": "917-555-0123",
-                             "pay_type": "现金 Cash"})
+                             "pay_type": "现金 Cash",
+                             "pickup_at": target_pickup})
 check("POST /api/order 自取下单成功", code == 200 and o["ok"], o)
+check("订单含 pickup_at 且 paid 为 False",
+      o["order"].get("pickup_at") == target_pickup and o["order"].get("paid") is False,
+      {"pickup_at": o["order"].get("pickup_at"), "paid": o["order"].get("paid")})
 check("created_at 是纽约时间", o["order"]["created_at"][:13] == datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H"), o["order"]["created_at"])
 check("自动打印成功(dryrun)", o["print"] and o["print"]["ok"], o.get("print"))
 check("小计 56.00", o["order"]["subtotal"] == 56.0, o["order"]["subtotal"])
@@ -202,7 +224,7 @@ check("重打接口可用", code == 200 and rp["ok"])
 
 print("== 8. 排队模式 + 取单代理（蓝牙打印机的接法） ==")
 url("/api/config", {"printer": {"driver": "queue", "queue": {"agent_key": "k-test", "target": "前台平板"}}})
-code, o2 = url("/api/order", {"items": [{"name": "荔枝肉", "qty": 1, "price": 32.0}], "pickup": True, "customer": "李四", "phone": "917-555-0456"})
+code, o2 = url("/api/order", {"items": [{"name": "荔枝肉", "qty": 1, "price": 32.0}], "pickup": True, "customer": "李四", "phone": "917-555-0456", "pickup_at": target_pickup})
 check("queue 驱动下单成功", o2["ok"] and o2["print"]["driver"] == "queue", o2.get("print"))
 code, denied = url("/api/agent/next?key=wrong")
 check("agent key 不对返回 403", code == 403, code)

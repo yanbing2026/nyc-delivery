@@ -11,6 +11,7 @@ legacy = {
     "no": "2509150001", "created_at": "2026-09-15 12:00:00", "openid": "oDemoOpenid0001",
     "table": "A3", "remark": "少辣", "pay_type": "微信支付", "footer": "谢谢惠顾|欢迎再来",
     "items": [{"name": "琅岐海蛎煎", "qty": 2, "price": 28.0}, {"name": "茉莉花茶", "qty": 1, "price": 8.0}],
+    "paid": True,
 }
 
 # 2) 纽约送餐单：地址 / 距离 / 税 / 小费 / 现金
@@ -21,9 +22,25 @@ delivery = {
     "items": [{"name": "海蛎煎", "qty": 2, "price": 12.95}, {"name": "白饭", "qty": 1, "price": 2.0}],
     "subtotal": 27.90, "tax": 2.48, "tax_rate": 0.08875, "tip": 5.02,
     "delivery_fee": 3.0, "total": 38.40, "pay_type": "现金 Cash（送到付）",
+    "paid": False,
 }
 
-for name, order in (("/tmp/py_receipt.txt", legacy), ("/tmp/py_receipt_delivery.txt", delivery)):
+# 3) 自取单：取餐时间 / 自取标记 / 信用卡 / 未付
+pickup = {
+    "no": "2509150003", "created_at": "2026-09-15 13:00:00", "customer": "李女士",
+    "phone": "917-555-0199", "pickup": True, "pickup_at": "2026-10-08 14:30",
+    "address": "",
+    "items": [{"name": "海蛎煎", "qty": 1, "price": 12.95}],
+    "subtotal": 12.95, "tax": 1.15, "tax_rate": 0.08875, "tip": 2.00,
+    "total": 16.10, "pay_type": "信用卡 Credit Card",
+    "paid": False,
+}
+
+for name, order in (
+    ("/tmp/py_receipt.txt", legacy),
+    ("/tmp/py_receipt_delivery.txt", delivery),
+    ("/tmp/py_receipt_pickup.txt", pickup),
+):
     with open(name, "w", encoding="utf-8") as f:
         f.write(R.render_receipt(order, SHOP, 32) + "\n")
     print("写出", name)

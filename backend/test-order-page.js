@@ -16,7 +16,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function mkEl(tag) {
   const el = {
     tagName: tag, children: [], style: {}, dataset: {}, _sel: {}, _cls: new Set(),
-    innerHTML: '', textContent: '', value: '', disabled: false, checked: false, onclick: null,
+    textContent: '', value: '', disabled: false, checked: false, onclick: null,
+    set innerHTML(v) { if (String(v) === '') { this.children.length = 0; this._sel = {}; } this._html = String(v); },
+    get innerHTML() { return this._html || ''; },
     classList: {
       add: (c) => el._cls.add(c), remove: (c) => el._cls.delete(c),
       toggle: (c, on) => (on === undefined ? el._cls.has(c) ? el._cls.delete(c) : el._cls.add(c) : on ? el._cls.add(c) : el._cls.delete(c)),
@@ -74,6 +76,8 @@ async function up() {
     // 把内部状态暴出来给测试用
     const patched = noAuto + `\n;globalThis.__T = { boot, refresh, renderMenu, cart, setMode, setTip, pick,
       get Q(){return Q}, get CFG(){return CFG}, get MENU(){return MENU}, get pickup(){return pickup},
+      get pickAt(){return pickAt}, set pickAt(v){pickAt=v},
+      get paySel(){return paySel}, set paySel(v){paySel=v},
       submit(){ $('submit').onclick(); }, setAddr(v){ $('addr').value = v; onAddr(); }, get acTimer(){return acTimer} };`;
     eval(patched);
     const T = globalThis.__T;
@@ -89,7 +93,7 @@ async function up() {
       [...els['mPickup']._cls, ...els['mDelivery']._cls]);
     T.setMode(false);
     check('切回送餐按钮状态正确', els['mDelivery']._cls.has('on') && !els['mPickup']._cls.has('on'));
-    check('支付方式只有现金', (T.CFG.delivery.payment || []).join() === '现金 Cash（送到付）', T.CFG.delivery.payment);
+    check('支付方式有三条', (T.CFG.delivery.payment || []).join() === '现金 Cash,微信转账 WeChat,信用卡 Credit Card', T.CFG.delivery.payment);
     check('起送价显示', els['shopLine'].textContent.includes('起送'), els['shopLine'].textContent);
 
     console.log('== 2. 选菜（点页面上的 + 按钮） ==');
@@ -140,6 +144,7 @@ async function up() {
     els['phone'].value = '917-555-0123';
     els['remark'].value = '多给筷子，不要辣';
     check('提交按钮已启用', els['submit'].disabled === false, els['submit'].disabled);
+    els['slots'].children[1].click();
     await T.submit();
     await sleep(1500);
     const doneNo = els['doneNo'].textContent;
@@ -170,6 +175,34 @@ async function up() {
     check('自取总价比送餐低，差额正好是配送费',
       deliveryTotal - T.Q.total === feeDelivery, [T.Q.total, deliveryTotal, feeDelivery]);
     check('自取隐藏地址框', els['deliveryBox'].style.display === 'none', els['deliveryBox'].style.display);
+
+    check('slots 渲染 13 个按钮', (els['slots'].children || []).length === 13, (els['slots'].children || []).length);
+    T.pickAt = '';
+    els['msgs'].innerHTML = '';
+    await T.submit();
+    await sleep(50);
+    check('没选时间下单不发请求且有提示', els['msgs'].innerHTML.includes('请选择取餐时间'), els['msgs'].innerHTML);
+
+    els['slots'].children[1].click();
+    await T.submit();
+    await sleep(1500);
+    const pickupOrderNo = els['doneNo'].textContent.replace('订单号 ', '');
+    const savedPickup = (await (await fetch(BASE + '/api/orders')).json()).orders.find((o) => o.no === pickupOrderNo);
+    const wantDay = T.CFG.delivery.pickup.day;
+    const wantPickupAt = wantDay + ' 14:30';
+    check("选中第 2 个 slot 后 saved.pickup_at === '<那天> 14:30'",
+      savedPickup && savedPickup.pickup_at === wantPickupAt,
+      [wantPickupAt, savedPickup && savedPickup.pickup_at]);
+
+    const paysLenOk = (els['pays'].children || []).length === 3;
+    els['pays'].children[2].click();
+    await T.submit();
+    await sleep(1500);
+    const payOrderNo = els['doneNo'].textContent.replace('订单号 ', '');
+    const savedCredit = (await (await fetch(BASE + '/api/orders')).json()).orders.find((o) => o.no === payOrderNo);
+    check("付款方式渲染 3 个且点第 3 个后 saved.pay_type === '信用卡 Credit Card'",
+      paysLenOk && savedCredit && savedCredit.pay_type === '信用卡 Credit Card', savedCredit && savedCredit.pay_type);
+    els['pays'].children[0].click();
 
     console.log('== 7. 远距离地址（不设上限，按超出里程计费） ==');
     T.setMode(false);
