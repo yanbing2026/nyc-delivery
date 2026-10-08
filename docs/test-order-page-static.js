@@ -98,6 +98,21 @@ globalThis.fetch = async (u, opts) => {
   if (url.startsWith(BACKEND + '/api/order')) {
     const body = JSON.parse((opts && opts.body) || (arguments[1] && arguments[1].body) || '{}');
     lastOrderBody = body;
+    if (body.pickup_at && body.pickup_at.startsWith('1999-01-01')) {
+      return reply({
+        ok: false,
+        error: '取餐时间已过期，请按新的可选时间重新选择',
+        pickup: {
+          day: '2026-10-09',
+          slots: ['14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'],
+          cutoff: '22:00',
+          start: '14:00',
+          end: '20:00',
+          step_minutes: 30,
+          day_offset: 2,
+        },
+      });
+    }
     return reply({ ok: true, order: { no: '260916000000001', created_at: '2026-09-16 01:00:00',
       customer: body.customer, phone: body.phone, address: '',
       items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: 0,
@@ -247,6 +262,28 @@ globalThis.fetch = async (u, opts) => {
     els['doneMsg'].textContent);
 
   els['pays'].children[0].click();
+
+  els['slots'].children[1].click();
+  const prevWasOn = (els['slots'].children[1].classList.contains('on') || els['slots'].children[1]._cls.has('on'));
+  T.pickAt = '1999-01-01 14:30';
+  calls.length = 0;
+  await T.submit();
+  await sleep(50);
+  check('下单遇排期过期 → 重新渲染 13 个时段、清除选中态、显示错误文案、按钮可再点',
+    prevWasOn &&
+    (els['slots'].children || []).length === 13 &&
+    (els['slots'].children || []).every((b) => !b.classList.contains('on') && !b._cls.has('on')) &&
+    T.pickAt === '' &&
+    els['msgs'].innerHTML.includes('取餐时间已过期，请按新的可选时间重新选择') &&
+    els['submit'].disabled === false,
+    {
+      prevWasOn,
+      slotsLen: (els['slots'].children || []).length,
+      hasOn: (els['slots'].children || []).some((b) => b.classList.contains('on') || b._cls.has('on')),
+      pickAt: T.pickAt,
+      msgs: els['msgs'].innerHTML,
+      disabled: els['submit'].disabled,
+    });
 
   console.log('== 7. 换菜单后购物车里的"幽灵菜"要被清掉 ==');
   els['menu'].children[1].querySelector('.plus').onclick();   // 真实存在的一道菜

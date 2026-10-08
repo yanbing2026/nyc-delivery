@@ -343,7 +343,18 @@ $('submit').onclick=async()=>{
   if(backend){
     try{
       const r=await fetch(backend+'/api/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
-      if(!r.ok){ $('msgs').innerHTML=`<div class="msg err">${r.error||'下单失败'}</div>`; $('submit').disabled=false; $('submit').textContent='下单'; return; }
+      if(!r.ok){
+        if(r.pickup){
+          if(!cfg) cfg={};
+          cfg.pickup=r.pickup;
+          pickAt='';
+          renderSlots();
+        }
+        $('msgs').innerHTML=`<div class="msg err">${r.error||'下单失败'}</div>`;
+        $('submit').disabled=false;
+        $('submit').textContent='下单';
+        return;
+      }
       order=r.order; printMsg=r.print&&r.print.ok?`小票已打印（${r.print.driver}）`:`打印未成功：${(r.print&&(r.print.error||r.print.mode))||'未知'}`;
     }catch(e){ $('msgs').innerHTML='<div class="msg err">下单没成功：连不上店里服务器，请重试或直接打电话订餐。</div>'; $('submit').disabled=false; $('submit').textContent='下单'; return; }
   }else{
