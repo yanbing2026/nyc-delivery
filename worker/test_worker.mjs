@@ -447,7 +447,17 @@ check("自取下单不带 pickup_at → 400", noPick.status === 400 && noPick.da
 const badPick = await call("/api/order", { method: "POST", body: {
   items: MENU, pickup: true, pickup_at: "1999-01-01 14:00", customer: "李先生", phone: "917-555-0123",
 }});
-check("自取下单带 pickup_at: '1999-01-01 14:00' → 400", badPick.status === 400 && badPick.data.ok === false, badPick.data);
+check("自取下单带 pickup_at: '1999-01-01 14:00' → 400",
+  badPick.status === 400 &&
+  badPick.data.ok === false &&
+  badPick.data.pickup?.slots?.length === 13 &&
+  badPick.data.pickup?.slots?.[0] === "14:00" &&
+  badPick.data.pickup?.slots?.[12] === "20:00" &&
+  badPick.data.pickup?.day > ps.now.slice(0, 10) &&
+  (badPick.data.pickup?.day_offset === 1 || badPick.data.pickup?.day_offset === 2) &&
+  typeof badPick.data.error === "string" &&
+  badPick.data.error.includes("重新选择"),
+  badPick.data);
 
 const targetDaySlot = `${ps.day} 14:00`;
 const goodPick = await call("/api/order", { method: "POST", body: {

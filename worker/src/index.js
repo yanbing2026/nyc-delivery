@@ -117,7 +117,11 @@ async function createOrder(env, body, ip) {
   if (pickup) {
     if (!pickupAt) return json({ ok: false, error: "请选择取餐时间" }, 400);
     if (!S.validPickup(pickupAt, stampNow))
-      return json({ ok: false, error: "取餐时间不在可选范围内，请重新选择" }, 400);
+      return json({
+        ok: false,
+        error: "取餐时间已过期，请按新的可选时间重新选择",
+        pickup: { ...S.pickupPlan(stampNow), day_offset: stampNow.slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 }
+      }, 400);
   }
 
   const id = orderNo();
