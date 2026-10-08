@@ -2,6 +2,7 @@
    页面现在的职责：收集地址、显示后端算出来的运费 —— 所以这里把 fetch 打成桩，
    不依赖任何线上地址服务（geosearch 长期 503、Nominatim 429 都不会再影响这一套）。
    跑法：node test-order-page-static.js */
+process.on('unhandledRejection', (e) => { console.error('UNHANDLED REJECTION:', e && e.stack || e); process.exitCode = 1; });
 const fs = require('fs');
 const path = require('path');
 // 不需要本地里程模块了：运费由（桩）后端返回，页面只负责显示
@@ -98,6 +99,9 @@ globalThis.fetch = async (u, opts) => {
   if (url.startsWith(BACKEND + '/api/order')) {
     const body = JSON.parse((opts && opts.body) || (arguments[1] && arguments[1].body) || '{}');
     lastOrderBody = body;
+    if (!Array.isArray(body.items) || body.items.some((i) => !i || !i.id)) {
+      return reply({ ok: false, error: '测试桩：每道菜必须带 id' }, 400);
+    }
     if (body.pickup_at && body.pickup_at.startsWith('1999-01-01')) {
       return reply({
         ok: false,
