@@ -30,7 +30,7 @@ npx wrangler deploy                     # 拿到 https://nyc-delivery-orders.<�
 | `GET /api/report/summary?from=&to=` | 店里 App | 日报/月报：营业额、小计、税、小费、配送费、外卖 vs 自取、客单价、实收现金、**现金差额**、失败打印数、待人工核对数 |
 | `POST /api/report/settings` | 店主 | 改配送规则/店址（改店址会自动重新解析坐标） |
 
-Agent 接口用请求头 `x-agent-key` 认证（也可用 `?key=`）。
+Agent 接口用请求头 `x-agent-key` 认证（不接受 `?key=` —— query 里的 key 会进日志）。
 
 ## 订单状态机
 

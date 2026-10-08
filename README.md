@@ -3,7 +3,7 @@
 不经过微信公众号的普通点单网站：顾客户端下单 → 云端排队 → 店里安卓设备拉单 → 蓝牙热敏打印机出票 → 本地记账/对账。
 
 ```
-顾客手机 ──> docs/（静态站，Cloudflare/GitHub Pages，只收集地址/显示金额）
+顾客手机 ──> docs/（静态站，Cloudflare Pages，收集姓名电话/选取餐时间与付款方式/显示金额）
                 │ POST /api/order
                 ▼
           worker/（Cloudflare Worker + D1，免费档，不休眠）
@@ -16,8 +16,8 @@
 
 | 目录 | 是什么 | 怎么跑 |
 |---|---|---|
-| `worker/src/index.js` | Worker 路由：`/api/config`、`/api/quote`、`/api/autocomplete`、`/api/order`、**`/api/lookup`（老客取回，只凭手机号）**、`/api/agent/*`（取单/回写）、`/api/report/*`、`/api/pos/publish` |
-| `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额：地址候选走 Worker 的 `/api/autocomplete`，报价走 `/api/quote`，自己不算钱、也不需要任何 key。店名/电话/菜单全从后端读（内容来自 TabPOS 的发布） | 推到 Pages：仓库设置 → Pages → 分支 `main` + 目录 `/docs`，站点根就是它 |
+| `worker/src/index.js` | Worker 路由：`/api/config`、`/api/quote`、`/api/autocomplete`、`/api/order`、`/api/agent/*`（取单/回写）、`/api/report/*`、`/api/pos/publish` |
+| `docs/index.html` | **顾客点单页（站点首页）**。只负责收集地址、显示金额、选取餐时间和付款方式：地址候选走 Worker 的 `/api/autocomplete`，报价走 Worker 的 `/api/quote`，取餐排期与付款方式走 `/api/config`，自己不算钱、也不需要任何 key。店名/电话/菜单全从后端读（内容来自 TabPOS 的发布） | 发布：`npx wrangler pages deploy docs --project-name mrbraised --branch main`（Cloudflare Pages，站点根就是它；旧项目 `nycdelivery` 还在，当镜像） |
 | `docs/order.html` | 老链接的跳转页（转到 `./`），之前发出去的 `/order.html` 不会失效 | — |
 | `worker/` | **线上后端**：下单/取单/回写/日报汇总。Cloudflare Worker + D1，免费档 10 万请求/天 | 见 `worker/README.md`（4 条 wrangler 命令） |
 | `backend/` | 本地参考后端（Python 标准库零依赖）：同一套业务逻辑，方便没网/没账号时跑通全流程，也能当自托管方案 | `cd backend && sh run.sh 8899` → http://127.0.0.1:8899/order |
@@ -74,7 +74,8 @@ Worker + D1（settings 表里的 shop / menu / pos 三行 = 网站的唯一真�
 - **只送纽约五大区**（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）：解析结果不在五区内直接拒单，别让顾客下完单才发现送不了。
 - 后台接口：`GET /api/config`（公开：店名/电话/菜单/运费规则）、`GET /api/report/verify`（验口令）、`POST /api/report/settings`（改规则/店名/菜单，需口令）。`/api/report/verify` 是专门给后台门锁用的**无副作用**接口 —— 不能用 `/api/agent/pending` 验口令，它会把订单标成"已取"。
 
-- 顾客**目前只收现金**（送到付）。不收卡 → 不碰支付网关/PCI，HTTPS 证书用 Let's Encrypt/Cloudflare 免费。
+- 顾客**到店付款**：下单时选 **现金 / 微信转账 / 信用卡**（清单由 App 的设置页发布，网站只读）。网页不碰卡号 → 不接支付网关/PCI，HTTPS 证书用 Let's Encrypt/Cloudflare 免费。**在线支付还没接**。
+- **定时取餐**：每天 **14:00–20:00** 取，30 分钟一格；**当天 22:00 前下单 → 次日取，22:00 后 → 后天取**（不能当天取）。规则在 `worker/src/schedule.js` 与 `backend/delivery.py` 各一份，必须一致。
 - **金额一律服务端重算**，前端传来的 subtotal/total 直接忽略（测试里专门放了一单假金额验证）。
 - 现货地址解析的四个坑（都踩过）：不写 ZIP 会把 `40 Bayard St` 解析到布鲁克林；`focus.point` 压不住这种歧义；**纯中文地址搜不到**（必须英文街名）；只给 ZIP 会被当街名。所以前端强制「门牌号 + 英文街名」，并给候选列表让顾客点选。
 - 钱用 Decimal / ROUND_HALF_UP（浮点会把 `12×8.875%` 算成 1.06）。
@@ -98,6 +99,6 @@ Worker + D1（settings 表里的 shop / menu / pos 三行 = 网站的唯一真�
 
 ## 需要你自己准备的凭据
 
-- Cloudflare 账号（Workers + D1 免费档，`worker/README.md` 里的 4 条命令）
-- 一个域名（可选，Pages 的 `*.github.io` 也能用；正式接单建议自定义域名）
+- Cloudflare 账号（Pages 前端 + Workers + D1 免费档，`worker/README.md` 里的 4 条命令）
+- 一个域名（可选，Pages 的 `*.pages.dev` 也能用；正式接单建议自定义域名）
 - TabPOS 构建：Android SDK + 签名（本仓库不含 APK）

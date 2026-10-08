@@ -80,6 +80,8 @@ def render_receipt(order: dict, shop: dict, width: int = 32) -> str:
         L.append("顾客: %s" % order["customer"])
     if order.get("phone"):
         L.append("电话: %s" % order["phone"])
+    if order.get("pickup") and order.get("pickup_at"):
+        L.append("取餐时间: %s" % order["pickup_at"])
     if order.get("address") and not order.get("pickup"):
         L.append(rule(width))
         L.append("送餐地址:")
@@ -131,6 +133,7 @@ def render_receipt(order: dict, shop: dict, width: int = 32) -> str:
     L.append(lr("合计", money(order.get("total", sub)), width))
     if order.get("pay_type"):
         L.append(lr("支付方式", str(order["pay_type"]), width))
+    L.append(lr("付款状态", "已付" if order.get("paid") else "未付", width))
     L.append(rule(width, "="))
     footer = order.get("footer") or shop.get("footer", "")
     if footer:

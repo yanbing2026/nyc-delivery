@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import time
 import urllib.parse
 import urllib.request
 
+import delivery
 import receipt as R
 import store as store_mod
 
@@ -41,7 +43,7 @@ class DryRunPrinter:
 
     def print_text(self, text: str, order: dict | None = None, copies: int = 1) -> dict:
         os.makedirs(OUT_DIR, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(delivery.NY_TZ).strftime("%Y%m%d-%H%M%S")
         order_no = (order or {}).get("no", "TEST")
         escpos = R.to_escpos(text, cutter=True)
         base = os.path.join(OUT_DIR, "%s_%s" % (order_no, stamp))
@@ -186,8 +188,8 @@ def print_order(cfg: dict, order: dict, shop: dict, width: int = 32, copies: int
 
 def test_page(cfg: dict, shop: dict, width: int = 32) -> dict:
     order = {
-        "no": "TEST-" + time.strftime("%H%M%S"),
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "no": "TEST-" + datetime.now(delivery.NY_TZ).strftime("%H%M%S"),
+        "created_at": delivery.now_str(),
         "items": [{"name": "测试商品", "qty": 1, "price": 0.01}],
         "pay_type": "打印测试",
         "footer": "打印链路正常",

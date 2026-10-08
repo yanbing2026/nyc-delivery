@@ -25,7 +25,6 @@ header h1{margin:0;font-size:19px}header .d{font-size:12px;opacity:.92;margin-to
 label{display:block;font-size:13px;color:var(--dim);margin:10px 0 6px}
 input,textarea{width:100%;min-height:46px;padding:11px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:#fff;color:var(--fg)}
 .hint{font-size:12px;color:var(--dim);margin-top:4px}
-/* 老客取回块：和表单同宽，视觉上是个"辅助入口"，不抢主角 */
 .recall{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0}
 .recall .rh{font-size:13px;color:var(--dim);margin-bottom:6px}
 .recall button{border-radius:10px;border:1px solid var(--line);background:#fff;font-size:15px;font-weight:600;color:var(--fg);min-height:46px}
@@ -84,23 +83,17 @@ summary{font-size:14px;color:var(--dim)}
     <div class="hint">导航会打开你手机自带的地图 App（跳到你自己的地图里开始路线）。</div>
   </div>
 
-  <!-- 老客取回：输手机号带出上次的姓名/电话（不上验证，见 INSTRUCTIONS 的隐私说明） -->
-  <div class="recall">
-    <div class="rh">老客？输手机号带出上次的资料</div>
-    <div style="display:flex;gap:8px">
-      <input id="rp" type="tel" placeholder="917-555-0123" style="flex:1">
-      <button type="button" id="rbtn" style="padding:0 16px">取回</button>
-    </div>
-    <div class="hint" id="rmsg"></div>
-    <div id="rlast"></div>
-  </div>
 
-  <label>姓名</label><input id="cust" placeholder="例：张先生 / Mr. Zhang">
-  <label>电话</label><input id="phone" type="tel" placeholder="917-555-0123">
+  <label>姓名 *</label><input id="cust" placeholder="例：张先生 / Mr. Zhang" required aria-required="true">
+  <label>电话 *</label><input id="phone" type="tel" placeholder="917-555-0123" required aria-required="true">
   <label>备注</label><textarea id="remark" rows="2"></textarea>
+  <label>取餐时间 *</label>
+  <div class="hint" id="pickHint"></div>
+  <div class="tips" id="slots"></div>
   <label>小费</label><div class="tips" id="tips"></div>
   <label>支付方式</label>
-  <div class="cash">💵 现金 Cash（到店付）—— 目前只收现金，请备好零钱</div>
+  <div class="tips" id="pays"></div>
+  <div class="hint">到店付款；微信转账请转给店里，店里确认到账后小票才记「已付」。</div>
   <div id="msgs"></div>
   <div id="quote"></div>
 </div>
@@ -142,7 +135,7 @@ let MENU=[
 let SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 法拉盛 30 分钟送达'};
 // 运费一律由后端算；默认就指向线上 Worker，本地调试时用 localStorage('wxmenu_backend') 覆盖
 const DEFAULT_BACKEND='https://nyc-delivery-orders.yanbing2004.workers.dev';
-let cart={},pickup=true,tipRate=0,Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
+let cart={},pickup=true,tipRate=0,pickAt='',paySel='',Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
 // 缺字段一律显示 —（以前 Number(v||0) 会把 undefined 变成 $0.00，
 // 顾客看到"合计 $0.00"会以为页坏了）
 const money=v=>Number.isFinite(+v)?'$'+(+v).toFixed(2):'—';
@@ -152,7 +145,7 @@ const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
 async function boot(){
   $('shopName').textContent=SHOP.name;
   applyDevVisibility();
-  renderTips();renderMenu();
+  renderTips();renderMenu();renderSlots();renderPays();
   if(!backend){
     $('shopLine').textContent=`${SHOP.phone} · 暂时无法接单`;
     $('shopHint').innerHTML='未连接后端：运费由店里服务器计算，请在菜单编辑页填上后端地址';
@@ -211,13 +204,17 @@ async function reloadConfig(){
       setTimeout(()=>map.invalidateSize(),50);   // 视口异步变化后重算一次，保险
     };
     document.head.appendChild(ms);
-    $('shopLine').textContent=[SHOP.phone,'请提前24小时预约','现金支付','到店自取'].filter(Boolean).join(' · ');
+    $('shopLine').textContent=[SHOP.phone,'次日 14:00–20:00 到店自取','到店付款'].filter(Boolean).join(' · ');
     renderTips();
+    renderSlots();
+    renderPays();
     applyDevVisibility();
     $('shopHint').innerHTML=`✓ 店址：${cfg.restaurant_addr}<br>✓ 规则：${cfg.free_miles} 英里内免费 · 超出每英里 ${money(cfg.per_mile_beyond)}`
       +`${cfg.max_miles>0?` · 最远 ${cfg.max_miles} 英里`:' · 不设距离上限'}`;
   }catch(e){
     $('shopHint').innerHTML='⚠ 读不到后端配置：'+(e.message||e);
+    renderSlots();
+    renderPays();
   }
 }
 function msg(k,t){ $('msgs').innerHTML=`<div class="msg ${k}">${t}</div>` }
@@ -226,6 +223,55 @@ function renderTips(){
   $('tips').innerHTML=opts.map(r=>`<button class="${tipRate===r?'on':''}" onclick="setTip(${r})">${r*100}%</button>`).join('')
     +`<button class="${tipRate===0?'on':''}" onclick="setTip(0)">不给</button>`
     +`<button onclick="setTip(-1)">自定</button>`;
+}
+function renderSlots(){
+  const box=$('slots'), h=$('pickHint');
+  if(!box||!h) return;
+  box.innerHTML='';
+  if(!cfg||!cfg.pickup||!Array.isArray(cfg.pickup.slots)){
+    h.textContent='暂时读不到取餐时间，请稍后再试';
+    if($('submit')) $('submit').disabled=true;
+    return;
+  }
+  const p=cfg.pickup;
+  const dayText=p.day_offset===1?'明天':'后天';
+  h.textContent=`今晚 ${p.cutoff} 前下单 → ${dayText} ${p.start}–${p.end} 取；过了 ${p.cutoff} 就得再晚一天。`;
+  p.slots.forEach(s=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.textContent=s;
+    const target=`${p.day} ${s}`;
+    if(pickAt===target){
+      b.className='on';
+      b.classList.add('on');
+    }
+    b.onclick=()=>{
+      pickAt=target;
+      renderSlots();
+    };
+    box.appendChild(b);
+  });
+}
+function renderPays(){
+  const box=$('pays');
+  if(!box) return;
+  box.innerHTML='';
+  const list=(cfg&&Array.isArray(cfg.payment)&&cfg.payment.length)?cfg.payment:[];
+  if(list.length&&(!paySel||!list.includes(paySel))) paySel=list[0];
+  list.forEach(p=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.textContent=p;
+    if(paySel===p){
+      b.className='on';
+      b.classList.add('on');
+    }
+    b.onclick=()=>{
+      paySel=p;
+      renderPays();
+    };
+    box.appendChild(b);
+  });
 }
 function setTip(r){ if(r<0){tipRate=Math.min(0.5,Math.max(0,(parseFloat(prompt('小费百分比','20'))||0)/100));}else tipRate=r; renderTips(); refresh(); }
 function renderMenu(){
@@ -266,7 +312,7 @@ async function refresh(){
   const probs=[];
   if(q.ok===false) probs.push(['err',q.error]);
   $('msgs').innerHTML=probs.map(p=>`<div class="msg ${p[0]}">${p[1]}</div>`).join('');
-  $('submit').disabled=!q.ok||c===0;
+  $('submit').disabled=!q.ok||c===0||!cfg||!cfg.pickup;
   $('barHint').textContent=`${c} 件 · 到店自取`;
 }
 function rows(q,sub){
@@ -280,9 +326,14 @@ function rows(q,sub){
 }
 
 $('submit').onclick=async()=>{
+  if(!$('cust').value.trim() || $('phone').value.replace(/\D/g,'').length<10){
+    $('msgs').innerHTML='<div class="msg err">请填姓名和电话（电话至少 10 位数字），不然店里没法联系你。</div>';
+    return;
+  }
+  if(!pickAt){ $('msgs').innerHTML='<div class="msg err">请选择取餐时间</div>'; return; }
   $('submit').disabled=true; $('submit').textContent='提交中…';
   const body={items:items(),pickup:true,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
-    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pay_type:(cfg&&cfg.payment&&cfg.payment[0])||PAY_DEFAULT,
+    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pickup_at:pickAt,pay_type:paySel,
     address:'',source:'pages-delivery'};
   let order=null,printMsg='';
   if(!backend){
@@ -292,20 +343,30 @@ $('submit').onclick=async()=>{
   if(backend){
     try{
       const r=await fetch(backend+'/api/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(x=>x.json());
-      if(!r.ok){ $('msgs').innerHTML=`<div class="msg err">${r.error||'下单失败'}</div>`; $('submit').disabled=false; $('submit').textContent='下单'; return; }
+      if(!r.ok){
+        if(r.pickup){
+          if(!cfg) cfg={};
+          cfg.pickup=r.pickup;
+          pickAt='';
+          renderSlots();
+        }
+        $('msgs').innerHTML=`<div class="msg err">${r.error||'下单失败'}</div>`;
+        $('submit').disabled=false;
+        $('submit').textContent='下单';
+        return;
+      }
       order=r.order; printMsg=r.print&&r.print.ok?`小票已打印（${r.print.driver}）`:`打印未成功：${(r.print&&(r.print.error||r.print.mode))||'未知'}`;
     }catch(e){ $('msgs').innerHTML='<div class="msg err">下单没成功：连不上店里服务器，请重试或直接打电话订餐。</div>'; $('submit').disabled=false; $('submit').textContent='下单'; return; }
   }else{
     printMsg='（这家店还没接打印机：小票没出，请把订单号告诉店员。）';
   }
   $('doneNo').textContent='订单号 '+order.no;
-  $('doneMsg').textContent=`${printMsg} 请到店取餐，备好现金 ${money(order.total)}。`;
+  $('doneMsg').textContent=`${printMsg} 取餐时间 ${order.pickup_at}，付款方式 ${order.pay_type}（未付，到店付）。请到店取餐。`;
   $('doneRcpt').textContent=WXMenu.renderReceipt(order,{name:SHOP.name,slogan:SHOP.slogan,phone:SHOP.phone,footer:'谢谢惠顾|现金支付'},32);
   saveCustomer({name:body.customer,phone:body.phone});
   $('done').classList.add('show');
 };
-// ---- 老客取回 + 记住上次填的资料 ----
-// 方案：手机号当钥匙，不做验证（店里定的）。所以只回姓名/最近地址/来过次数/上一单的菜。
+// ---- 记住上次填的资料 ----
 const LS='wx_customer';
 const savedCustomer=()=>{try{return JSON.parse(localStorage.getItem(LS)||'null')||{}}catch(e){return{}}};
 const saveCustomer=(o)=>{try{localStorage.setItem(LS,JSON.stringify(o))}catch(e){}};
@@ -314,47 +375,8 @@ function prefillSaved(){
   const s=savedCustomer();
   if(s.phone&&!$('phone').value)   $('phone').value=s.phone;
   if(s.name&&!$('cust').value)     $('cust').value=s.name;
-  if(s.phone) $('rp').value=s.phone;
 }
 
-function addLastToCart(items){
-  let ok=0,gone=[];
-  (items||[]).forEach(it=>{
-    const inMenu=MENU.some(g=>g.items.some(x=>x.id===it.id));
-    if(inMenu){cart[it.id]=Math.max(1,Number(it.qty)||1);ok++}else gone.push(it.name||it.id);
-  });
-  renderMenu();refresh();
-  return {ok,gone};
-}
-
-async function recall(){
-  const p=$('rp').value.trim();
-  $('rmsg').textContent='查询中…'; $('rlast').innerHTML='';
-  if(!backend){$('rmsg').textContent='暂时连不上店里服务器，稍后再试或直接打电话订。';return}
-  try{
-    const r=await fetch(backend+'/api/lookup',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({phone:p})}).then(x=>x.json());
-    if(!r.ok){$('rmsg').textContent=r.error||'查不到，请直接填资料。';return}
-    if(!r.found){$('rmsg').textContent='这个号码还没有下过单，直接填资料就行。';return}
-    if(!$('cust').value) $('cust').value=r.name||'';
-    $('phone').value=p;
-    $('rmsg').textContent=`欢迎回来，${r.name||'老客'}：这个号码来过 ${r.orders} 次`
-      + (r.last_at?`，上次 ${String(r.last_at).replace('T',' ').slice(0,16)}`:'') + '。';
-    const li=(r.last_order&&r.last_order.items)||[];
-    if(li.length){
-      $('rlast').innerHTML='<div class="hint" style="margin-top:6px">上次点的：'
-        +li.map(i=>`${i.name}×${i.qty}`).join('、')
-        +`  <button type="button" id="rone" style="padding:2px 10px;margin-left:6px">再来一单</button></div>`;
-      $('rone').onclick=()=>{const res=addLastToCart(li);
-        $('rmsg').textContent=`已加入购物车 ${res.ok} 道菜`
-          +(res.gone.length?`；这些现在没有：${res.gone.join('、')}`:'' )+'。';};
-    }
-    saveCustomer({name:$('cust').value.trim(),phone:p});
-  }catch(e){$('rmsg').textContent='查询失败：连不上店里服务器。'}
-}
-
-$('rbtn').onclick=recall;
-$('rp').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();recall()}});
 prefillSaved();
 
 boot();

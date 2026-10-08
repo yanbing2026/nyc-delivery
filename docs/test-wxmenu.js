@@ -26,7 +26,7 @@ check('占位域名被提示', W.validate(b5).some((e) => e.includes('占位')))
 
 console.log('== 小票渲染（与 Python 同样的订单，必须逐字符一致） ==');
 const order = { no: '2509150001', created_at: '2026-09-15 12:00:00', openid: 'oDemoOpenid0001',
-  table: 'A3', remark: '少辣', pay_type: '微信支付', footer: '谢谢惠顾|欢迎再来',
+  table: 'A3', remark: '少辣', pay_type: '微信支付', footer: '谢谢惠顾|欢迎再来', paid: true,
   items: [{ name: '琅岐海蛎煎', qty: 2, price: 28.0 }, { name: '茉莉花茶', qty: 1, price: 8.0 }] };
 const shop = { name: '琅岐海鲜小馆', slogan: '-- 现捞现做 --', phone: '0591-8888 8888', footer: '谢谢惠顾|欢迎再来' };
 const text = W.renderReceipt(order, shop, 32);
@@ -38,7 +38,7 @@ const fsx = require('fs');
 // 基准文件是 Python 渲染的真身，由 backend/make_receipt_fixtures.py 生成。
 // 以前只在原来那台机器的 /tmp 里留了一份，换台机器（或清过 /tmp）就直接
 // ENOENT —— README 说的「可以单独跑」其实不成立，所以这里按需自己生成。
-const FIXTURES = ['/tmp/py_receipt.txt', '/tmp/py_receipt_delivery.txt'];
+const FIXTURES = ['/tmp/py_receipt.txt', '/tmp/py_receipt_delivery.txt', '/tmp/py_receipt_pickup.txt'];
 if (!FIXTURES.every((f) => fsx.existsSync(f))) {
   const { execFileSync } = require('child_process');
   const backendDir = require('path').join(__dirname, '..', 'backend');
@@ -53,6 +53,7 @@ if (!FIXTURES.every((f) => fsx.existsSync(f))) {
 }
 check('老式微信单：与 Python 逐字符一致',
   text === fsx.readFileSync('/tmp/py_receipt.txt', 'utf8').replace(/\n$/, ''), '见 /tmp/py_receipt.txt');
+check('微信单 fixture 里是「已付」', fsx.readFileSync('/tmp/py_receipt.txt', 'utf8').includes('已付'));
 
 console.log('== 纽约送餐单：地址/距离/税/小费/现金，与 Python 逐字符一致 ==');
 const dorder = { no: '2509150002', created_at: '2026-09-15 12:30:00', customer: '张先生',
@@ -60,13 +61,25 @@ const dorder = { no: '2509150002', created_at: '2026-09-15 12:30:00', customer: 
   distance_miles: 0.84, eta_minutes: 23, remark: '多给筷子，不要辣',
   items: [{ name: '海蛎煎', qty: 2, price: 12.95 }, { name: '白饭', qty: 1, price: 2.0 }],
   subtotal: 27.90, tax: 2.48, tax_rate: 0.08875, tip: 5.02, delivery_fee: 3.0, total: 38.40,
-  pay_type: '现金 Cash（送到付）' };
+  pay_type: '现金 Cash（送到付）', paid: false };
 const dtext = W.renderReceipt(dorder, shop, 32);
 check('送餐单与 Python 逐字符一致',
   dtext === fsx.readFileSync('/tmp/py_receipt_delivery.txt', 'utf8').replace(/\n$/, ''), dtext.split('\n').slice(0, 14).join(' | '));
 check('含送餐地址与距离', dtext.includes('送餐地址') && dtext.includes('0.84 英里'));
 check('含税/配送费/小费/现金', dtext.includes('税 8.875%') && dtext.includes('配送费') && dtext.includes('小费') && dtext.includes('现金'));
 check('每行不超过 32 宽', dtext.split('\n').every((l) => W.dw(l) <= 32));
+
+console.log('== 纽约自取单：取餐时间/自取标记/信用卡/未付，与 Python 逐字符一致 ==');
+const porder = { no: '2509150003', created_at: '2026-09-15 13:00:00', customer: '李女士',
+  phone: '917-555-0199', pickup: true, pickup_at: '2026-10-08 14:30', address: '',
+  items: [{ name: '海蛎煎', qty: 1, price: 12.95 }],
+  subtotal: 12.95, tax: 1.15, tax_rate: 0.08875, tip: 2.00, total: 16.10,
+  pay_type: '信用卡 Credit Card', paid: false };
+const ptext = W.renderReceipt(porder, shop, 32);
+check('自取单与 Python 逐字符一致',
+  ptext === fsx.readFileSync('/tmp/py_receipt_pickup.txt', 'utf8').replace(/\n$/, ''), ptext.split('\n').slice(0, 14).join(' | '));
+check('自取单含取餐时间与未付状态',
+  ptext.includes('取餐时间: 2026-10-08 14:30') && ptext.includes('付款状态') && ptext.includes('未付'));
 
 console.log('== ESC/POS 字节 ==');
 const hex = W.toEscPosHex(text);

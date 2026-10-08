@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import json
 import math
 import os
@@ -21,6 +22,14 @@ import time
 import urllib.parse
 import urllib.request
 from decimal import Decimal, ROUND_HALF_UP
+from zoneinfo import ZoneInfo
+
+NY_TZ = ZoneInfo("America/New_York")   # 纽约时间：EDT/EST 自动切；别用机器本地时区
+
+
+def now_str() -> str:
+    """订单/小票/日志的时间戳统一走这里（纽约时间）。"""
+    return datetime.now(NY_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search"
 GEOSEARCH_AC = "https://geosearch.planninglabs.nyc/v2/autocomplete"
@@ -215,6 +224,51 @@ def route_miles(a: dict, b: dict) -> dict:
                 "minutes": None, "estimated": True, "source": "haversine×1.35"}
 
 
+# ---- 取餐排期（全部按纽约时间；传进来的 stamp 一定是 "YYYY-MM-DD HH:MM:SS"）----
+PICKUP_RULES = {"cutoff": "22:00", "start": "14:00", "end": "20:00", "step_minutes": 30, "lead_days": 1}
+
+def _to_min(hhmm):
+    parts = str(hhmm or "").split(":")[:2]
+    if len(parts) < 2:
+        return 0
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except (ValueError, TypeError):
+        return 0
+
+def _from_min(n):
+    return "%02d:%02d" % (n // 60, n % 60)
+
+def _norm_rules(rules=None):
+    if not isinstance(rules, dict):
+        return PICKUP_RULES
+    p = rules.get("pickup") if isinstance(rules.get("pickup"), dict) else rules
+    return {**PICKUP_RULES, **{k: v for k, v in p.items() if k in PICKUP_RULES}}
+
+def pickup_day(stamp, rules=None):
+    """目标取餐日：cutoff 之前下单 → 次日；cutoff 及以后 → 后天。"""
+    r = _norm_rules(rules)
+    day = str(stamp or "")[:10]
+    add = r["lead_days"] if _to_min(str(stamp or "")[11:16]) < _to_min(r["cutoff"]) else r["lead_days"] + 1
+    return (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=add)).strftime("%Y-%m-%d")
+
+def slots_for(day, rules=None):
+    r = _norm_rules(rules)
+    return [_from_min(m) for m in range(_to_min(r["start"]), _to_min(r["end"]) + 1, r["step_minutes"])]
+
+def pickup_plan(stamp, rules=None):
+    r = _norm_rules(rules)
+    day = pickup_day(stamp, r)
+    return {"day": day, "slots": slots_for(day, r), "cutoff": r["cutoff"], "start": r["start"],
+            "end": r["end"], "step_minutes": r["step_minutes"], "lead_days": r["lead_days"],
+            "day_offset": 1 if _to_min(str(stamp or "")[11:16]) < _to_min(r["cutoff"]) else 2}
+
+def valid_pickup(value, stamp, rules=None):
+    plan = pickup_plan(stamp, rules)
+    v = str(value or "").strip()
+    return v[:10] == plan["day"] and v[11:16] in plan["slots"]
+
+
 DEFAULT_DELIVERY = {
     "enabled": True,
     "free_miles": 5,                         # 5 英里内不收配送费
@@ -225,7 +279,8 @@ DEFAULT_DELIVERY = {
     "tax_rate": 0.08875,                     # 纽约市销售税 8.875%
     "prep_minutes": 20,                      # 出餐时间，加到送达预估上
     "tip_options": [0.15, 0.18, 0.20],
-    "payment": ["现金 Cash（送到付）"],     # 目前只收现金
+    "payment": ["现金 Cash", "微信转账 WeChat", "信用卡 Credit Card"],
+    "pickup": dict(PICKUP_RULES),
     "restaurant_addr": "10-53 116th St, Flushing, NY 11356",   # ← 改成你自己的店址
     "restaurant": {"lat": 40.7873972, "lon": -73.8511667},
     "fallback_fee": 5.0,        # 路线服务抽风时用的兜底配送费（订单会标记待人工确认）
@@ -269,7 +324,7 @@ def quote(restaurant: dict, addr_query: str, subtotal: float, cfg: dict,
     out = {"subtotal": round(float(subtotal or 0), 2), "pickup": bool(pickup),
            "tax_rate": float(cfg.get("tax_rate") or 0),
            "min_order": float(cfg.get("min_order") or 0),
-           "quote_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+           "quote_at": now_str()}
     if pickup:
         out["distance"] = None
         out["delivery"] = {"ok": True, "fee": 0.0, "miles": 0, "tier": "到店自取"}

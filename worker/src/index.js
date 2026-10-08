@@ -2,6 +2,7 @@
 // 契约：POST /api/order 下单 → GET /api/agent/pending 取单 → POST /api/agent/status 回写
 import * as D from "./delivery.js";
 import * as C from "./catalog.js";
+import * as S from "./schedule.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 // Pages 前端跟 Worker 不同源，必须给 CORS，否则顾客点「下单」会被浏览器拦
@@ -14,16 +15,19 @@ const CORS = {
 const json = (obj, status = 200) =>
   new Response(JSON.stringify(obj, null, 2), { status, headers: { ...JSON_HEADERS, ...CORS } });
 
-const nowISO = () => new Date().toISOString().replace("T", " ").slice(0, 19);
-const orderNo = () => {
-  const d = new Date();
-  const p = (n, w = 2) => String(n).padStart(w, "0");
-  return (
-    String(d.getUTCFullYear()).slice(2) + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) +
-    p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds()) +
-    String(Math.floor(Math.random() * 1000)).padStart(3, "0")
-  );
+// 时间一律纽约时间（EDT=UTC-4 / EST=UTC-5，按夏令时自动切），不要 UTC：
+// 用 UTC 时，当地晚上 8 点以后下的单会掉进第二天的日报。
+const TZ = "America/New_York";
+const NY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit",
+  day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+const stamp = (d = new Date()) => {
+  const p = {};
+  for (const x of NY_FMT.formatToParts(d)) p[x.type] = x.value;
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
 };
+const nowISO = () => stamp();
+const nyDay = (d = new Date()) => stamp(d).slice(0, 10);
+const orderNo = () => stamp().replace(/\D/g, "").slice(2) + String(Math.floor(Math.random() * 1000)).padStart(3, "0");
 
 async function getSettings(env) {
   const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'delivery'").first();
@@ -71,51 +75,17 @@ const publicOrder = (r) => ({
   remark: r.remark, items: JSON.parse(r.items || "[]"), subtotal: r.subtotal, tax: r.tax,
   tax_rate: r.tax_rate, tip: r.tip, delivery_fee: r.delivery_fee, total: r.total,
   pay_type: r.pay_type, pickup: !!r.pickup, needs_manual_review: !!r.needs_manual_review,
+  pickup_at: r.pickup_at, paid: !!r.paid, paid_at: r.paid_at,
   taken_at: r.taken_at, printed_at: r.printed_at, done_at: r.done_at, error: r.error,
   cash_collected: r.cash_collected,
 });
 
-// 老客取回：只凭手机号，不做验证（店里定的方案 A —— 网页只收现金，没有支付信息，
-// 拿手机号能看到的只有"这个人以前叫什么/送哪"）。所以这里只回最少的东西：
-// 姓名 + 最近一次地址 + 来过几次 + 上一单的菜（用于"再来一单"），不回全部历史。
-// 号码先归一化成纯数字再比：顾客可能写 917-555-0123 或 (917) 555 0123。
-const digitsOf = (s) => String(s || "").replace(/[^0-9]/g, "").slice(0, 15);
-
-async function lookupCustomer(env, body, ip) {
-  const want = digitsOf(body && body.phone);
-  if (want.length < 10) return json({ ok: false, error: "请填完整手机号（10 位以上数字）" }, 400);
-  if (await rateLimited(env, ip, 60, "lookup")) return json({ ok: false, error: "查询太频繁，请过一会儿再试" }, 429);
-
-  // 库里存的是顾客当初写的原样号码，所以这里用去符号后的等值比较（单店数据量，不用索引也够快）
-  const norm = "REPLACE(REPLACE(REPLACE(REPLACE(phone,'-',''),' ',''),'(',''),')','')";
-  const rows = await env.DB.prepare(
-    `SELECT id, created_at, customer, address, borough, items, total, status, pickup
-       FROM orders WHERE ${norm} = ?1 ORDER BY created_at DESC LIMIT 5`
-  ).bind(want).all();
-  const list = rows.results || [];
-  if (!list.length) return json({ ok: true, found: false });
-
-  const cnt = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM orders WHERE ${norm} = ?1`
-  ).bind(want).first();
-  const last = list[0];
-  const parseItems = (s) => { try { return JSON.parse(s || "[]"); } catch (e) { return []; } };
-  return json({
-    ok: true, found: true,
-    name: String(last.customer || "").slice(0, 60),
-    orders: Number(cnt && cnt.n) || list.length,
-    last_at: last.created_at,
-    // 上一单（给"再来一单"用：只给 id 和数量，价格以菜单当前价为准）
-    last_order: {
-      status: last.status, pickup: !!last.pickup,
-      created_at: last.created_at,
-      items: parseItems(last.items).map((i) => ({ id: i.id, name: i.name, qty: i.qty })).slice(0, 40),
-    },
-    // 不把订单号、金额、地址或完整历史暴露给只凭手机号的网页查询。
-  });
-}
 
 async function createOrder(env, body, ip) {
+  const customer = String((body && body.customer) || "").trim();
+  const phone = String((body && body.phone) || "").trim();
+  if (!customer) return json({ ok: false, error: "请填姓名" }, 400);
+  if (phone.replace(/[^0-9]/g, "").length < 10) return json({ ok: false, error: "请填完整手机号（10 位以上数字）" }, 400);
   const asked = Array.isArray(body.items) ? body.items : [];
   if (!asked.length) return json({ ok: false, error: "购物车是空的" }, 400);
   if (await rateLimited(env, ip, 20, "order")) return json({ ok: false, error: "下单太频繁，请稍后再试或打电话订" }, 429);
@@ -142,18 +112,31 @@ async function createOrder(env, body, ip) {
   const q = await D.quote(cfg.restaurant, pickup ? "" : (body.address || "").trim(), subtotal, cfg,
     Number(body.tip_rate || 0), pickup, env.GOOGLE_MAPS_API_KEY);
   if (!q.ok) return json({ ok: false, error: q.error, quote: q }, 400);
+  const stampNow = nowISO();
+  const pickupAt = pickup ? String(body.pickup_at || "").trim() : "";
+  if (pickup) {
+    if (!pickupAt) return json({ ok: false, error: "请选择取餐时间" }, 400);
+    if (!S.validPickup(pickupAt, stampNow))
+      return json({
+        ok: false,
+        error: "取餐时间已过期，请按新的可选时间重新选择",
+        pickup: { ...S.pickupPlan(stampNow), day_offset: stampNow.slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 }
+      }, 400);
+  }
   const id = orderNo();
   const manual = !pickup && (q.distance || {}).ok === false;
+  const payList = Array.isArray(cfg.payment) && cfg.payment.length ? cfg.payment : ["现金 Cash"];
+  const payType = payList.includes(body.pay_type) ? String(body.pay_type) : payList[0];
   await env.DB.prepare(`INSERT INTO orders
     (id, created_at, source, customer, phone, address, borough, distance_miles, drive_minutes, eta_minutes,
-     remark, items, subtotal, tax, tax_rate, tip, delivery_fee, total, pay_type, pickup, status, needs_manual_review)
-    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,'pending',?21)`).bind(
-    id, nowISO(), String(body.source || "web").slice(0, 32), String(body.customer || "").slice(0, 60),
-    String(body.phone || "").slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
+     remark, items, subtotal, tax, tax_rate, tip, delivery_fee, total, pay_type, pickup_at, pickup, status, needs_manual_review)
+    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,'pending',?22)`).bind(
+    id, stampNow, String(body.source || "web").slice(0, 32), customer.slice(0, 60),
+    phone.slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
     (q.address || {}).borough || "", (q.distance || {}).miles ?? null, (q.distance || {}).minutes ?? null,
     q.eta_minutes ?? null, String(body.remark || "").slice(0, 300), JSON.stringify(items.slice(0, 50)),
     q.subtotal, q.tax, q.tax_rate, q.tip, q.delivery_fee, q.total,
-    String(body.pay_type || cfg.payment[0]).slice(0, 40), pickup ? 1 : 0, manual ? 1 : 0
+    payType, pickupAt, pickup ? 1 : 0, manual ? 1 : 0
   ).run();
 
   const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
@@ -165,6 +148,7 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname.replace(/\/+$/, "") || "/";
     const ip = request.headers.get("cf-connecting-ip") || "local";
+    // key 只从 header 走：query string 里的 key 会留在 Cloudflare 日志和 URL 里
     const agentKey = request.headers.get("x-agent-key") || "";
 
     try {
@@ -178,9 +162,16 @@ export default {
           restaurant_addr: cfg.restaurant_addr, restaurant: cfg.restaurant, max_miles: cfg.max_miles,
           min_order: cfg.min_order, tax_rate: cfg.tax_rate, tiers: cfg.tiers, free_miles: cfg.free_miles,
           per_mile_beyond: cfg.per_mile_beyond, prep_minutes: cfg.prep_minutes, tip_options: cfg.tip_options,
-          payment: cfg.payment } });
+          payment: cfg.payment,
+          pickup: { ...S.pickupPlan(nowISO()), day_offset: nowISO().slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 } } });
       }
       if (p === "/api/health") return json({ ok: true, at: nowISO() });
+
+      // 顾客页要的「可选哪天 / 哪些时间」
+      if (p === "/api/pickup-slots") {
+        const plan = S.pickupPlan(nowISO());
+        return json({ ok: true, now: nowISO(), ...plan, day_offset: nowISO().slice(11,16) < S.PICKUP_RULES.cutoff ? 1 : 2 });
+      }
 
       if (p === "/api/quote") {
         if (await rateLimited(env, ip, 120, "quote")) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
@@ -196,9 +187,6 @@ export default {
         if (await rateLimited(env, ip, 120, "autocomplete")) return json({ ok: false, error: "请求太频繁，请稍后再试" }, 429);
         return json({ ok: true, items: await D.geocodeCandidates(url.searchParams.get("q") || "", 6, env.GOOGLE_MAPS_API_KEY) });
       }
-
-      if (p === "/api/lookup" && request.method === "POST")
-        return lookupCustomer(env, await request.json().catch(() => ({})), ip);
       if (p === "/api/order" && request.method === "POST")
         return await createOrder(env, await request.json().catch(() => ({})), ip);
 
@@ -231,19 +219,23 @@ export default {
         const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
         if (!row) return json({ ok: false, error: "订单不存在" }, 404);
         const transitions = {
-          pending: ["taken", "void"],
-          taken: ["printed", "failed", "void"],
+          pending: ["taken", "printed", "failed", "void"],
+          taken:   ["printed", "failed", "void"],
           printed: ["done", "failed", "void"],
-          failed: ["taken", "void"],
-          done: [],
-          void: [],
+          failed:  ["taken", "printed", "void"],   // printed：店里重打失败的票
+          done:    ["void"],
+          void:    [],
         };
-        if (!transitions[row.status]?.includes(requested))
+        // 同状态重复上报视为幂等（店里会重复上报 printed），直接放行
+        if (requested !== row.status && !transitions[row.status]?.includes(requested))
           return json({ ok: false, error: `不允许从 ${row.status} 变成 ${requested}` }, 409);
+        const paid = b.paid === undefined || b.paid === null ? null : (b.paid ? 1 : 0);
         const sets = ["status = ?1", "error = ?2", "cash_collected = ?3"];
         const args = [requested, err, cash];
+        if (paid !== null) { args.push(paid); sets.push(`paid = ?${args.length}`); }
         if (requested === "printed") { args.push(nowISO()); sets.push(`printed_at = ?${args.length}`); }
         if (requested === "done") { args.push(nowISO()); sets.push(`done_at = ?${args.length}`); }
+        if (paid === 1) { args.push(nowISO()); sets.push(`paid_at = ?${args.length}`); }
         args.push(id);
         await env.DB.prepare(`UPDATE orders SET ${sets.join(", ")} WHERE id = ?${args.length}`)
           .bind(...args).run();
@@ -253,7 +245,7 @@ export default {
 
       // 设备同步用：拉一批订单（默认最近 30 天），记账在设备本地做
       if (p === "/api/agent/orders") {
-        const since = url.searchParams.get("since") || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19).replace("T", " ");
+        const since = url.searchParams.get("since") || stamp(new Date(Date.now() - 30 * 864e5));
         const lim = Math.min(Number(url.searchParams.get("limit") || 500), 2000);
         const rs = await env.DB.prepare(
           "SELECT * FROM orders WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2").bind(since, lim).all();
@@ -262,7 +254,7 @@ export default {
 
       if (p === "/api/report/summary") {
         // 店里 App 拿来做日报/月报对账（设备本地也会算一遍）
-        const from = url.searchParams.get("from") || new Date().toISOString().slice(0, 10);
+        const from = url.searchParams.get("from") || nyDay();
         const to = url.searchParams.get("to") || from;
         const r = await env.DB.prepare(`SELECT
             COUNT(*) AS orders,
@@ -349,6 +341,74 @@ export default {
           menu = await saveRow(env, "menu", m.menu);
         }
         return json({ ok: true, config: next, shop, menu });
+      }
+
+      // ---- 远程控制通道（云端驱动店里设备）与状态快照 ----
+      if (p === "/api/pos/command" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        const allow = ["set_setting", "publish_menu", "ping"];
+        if (!allow.includes(b.cmd))
+          return json({ ok: false, error: "不认识的命令" }, 400);
+        const id = orderNo();
+        const args = typeof b.args === "object" && b.args !== null ? JSON.stringify(b.args)
+          : (typeof b.args === "string" && b.args.trim() ? b.args : "{}");
+        await env.DB.prepare(
+          "INSERT INTO commands (id, created_at, cmd, args, status) VALUES (?1, ?2, ?3, ?4, 'queued')"
+        ).bind(id, nowISO(), b.cmd, args).run();
+        return json({ ok: true, id });
+      }
+
+      if (p === "/api/pos/command") {
+        const lim = Math.max(1, Math.min(Number(url.searchParams.get("limit") || 20) || 20, 100));
+        const rs = await env.DB.prepare(
+          "SELECT * FROM commands ORDER BY created_at DESC, id DESC LIMIT ?1"
+        ).bind(lim).all();
+        const commands = (rs.results || []).map((r) => {
+          let args = {};
+          try {
+            const v = JSON.parse(r.args || "{}");
+            if (typeof v === "object" && v !== null) args = v;
+          } catch {}
+          return { ...r, args };
+        });
+        return json({ ok: true, commands });
+      }
+
+      if (p === "/api/agent/command" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        if (b.status !== "done" && b.status !== "failed")
+          return json({ ok: false, error: "status 必须是 done 或 failed" }, 400);
+        const resStr = b.result != null ? (typeof b.result === "object" ? JSON.stringify(b.result) : String(b.result)) : null;
+        await env.DB.prepare(
+          "UPDATE commands SET status = ?1, result = ?2, updated_at = ?3 WHERE id = ?4"
+        ).bind(b.status, resStr, nowISO(), String(b.id || "")).run();
+        return json({ ok: true });
+      }
+
+      if (p === "/api/agent/command") {
+        const row = await env.DB.prepare(
+          "UPDATE commands SET status='sent', updated_at=?1 WHERE id=(SELECT id FROM commands WHERE status='queued' ORDER BY created_at LIMIT 1) RETURNING *"
+        ).bind(nowISO()).first();
+        if (!row) return json({ ok: true, command: null });
+        let args = {};
+        try {
+          const v = JSON.parse(row.args || "{}");
+          if (typeof v === "object" && v !== null) args = v;
+        } catch {}
+        return json({ ok: true, command: { id: row.id, cmd: row.cmd, args } });
+      }
+
+      if (p === "/api/agent/state" && request.method === "POST") {
+        const b = await request.json().catch(() => ({}));
+        await saveRow(env, "agent_state", b);
+        return json({ ok: true });
+      }
+
+      if (p === "/api/pos/state") {
+        let state = null;
+        try { state = await getRow(env, "agent_state"); } catch {}
+        if (typeof state !== "object" || state === null) state = null;
+        return json({ ok: true, state });
       }
 
       return json({ ok: false, error: "没有这个接口：" + p }, 404);

@@ -23,6 +23,9 @@ CREATE TABLE orders (
   total         REAL NOT NULL DEFAULT 0,
   pay_type      TEXT DEFAULT '现金 Cash（送到付）',
   pickup        INTEGER NOT NULL DEFAULT 0,
+  pickup_at     TEXT DEFAULT '',           -- 顾客选的取餐时间（纽约时间 "YYYY-MM-DD HH:MM"）
+  paid          INTEGER NOT NULL DEFAULT 0,-- 是否已收款（在线支付回调 / 店里确认到账）
+  paid_at       TEXT DEFAULT '',           -- 确认收款时间
   status        TEXT NOT NULL DEFAULT 'pending',  -- pending/taken/printed/failed/done/void
   needs_manual_review INTEGER NOT NULL DEFAULT 0,
   taken_at      TEXT DEFAULT '',
@@ -58,3 +61,6 @@ INSERT INTO settings (key, value) VALUES ('delivery', '{
 DROP TABLE IF EXISTS hits;
 CREATE TABLE hits (ip TEXT NOT NULL, ts INTEGER NOT NULL);
 CREATE INDEX idx_hits ON hits(ip, ts);
+
+CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, created_at TEXT, cmd TEXT, args TEXT, status TEXT, result TEXT, updated_at TEXT);
+
