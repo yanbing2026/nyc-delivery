@@ -398,6 +398,9 @@ check("GET /api/pos/command shows status done",
   hist.ok === true && Array.isArray(hist.commands) && hist.commands.some((c) => c.id === pingId && c.status === "done"),
   hist);
 
+const qLog = await agent("/api/pos/command", { method: "POST", body: { cmd: "log_tail", args: { max: 6000 } } });
+check("queue log_tail → ok + id", qLog.data.ok === true && typeof qLog.data.id === "string" && qLog.data.id.length > 0, qLog.data);
+
 const badCmd = await agent("/api/pos/command", { method: "POST", body: { cmd: "restart" } });
 check("unknown cmd → 400", badCmd.status === 400 && badCmd.data.ok === false && badCmd.data.error === "不认识的命令", badCmd.data);
 
