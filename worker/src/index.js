@@ -346,7 +346,7 @@ export default {
       // ---- 远程控制通道（云端驱动店里设备）与状态快照 ----
       if (p === "/api/pos/command" && request.method === "POST") {
         const b = await request.json().catch(() => ({}));
-        const allow = ["set_setting", "publish_menu", "ping"];
+        const allow = ["set_setting", "publish_menu", "ping", "log_tail"];
         if (!allow.includes(b.cmd))
           return json({ ok: false, error: "不认识的命令" }, 400);
         const id = orderNo();
