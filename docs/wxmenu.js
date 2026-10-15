@@ -161,6 +161,7 @@
     const subKnown = order.subtotal != null;
     const sub = subKnown ? Number(order.subtotal) : total;
     L.push(lr(subKnown ? '小计' : '合计', money(sub), width));
+    if (order.discount) L.push(lr('折扣(免税)', '-' + money(order.discount), width));
     if (order.tax) {
       const rate = order.tax_rate;
       L.push(lr('税' + (rate ? ' ' + (Number(rate) * 100).toFixed(3) + '%' : ''), money(order.tax), width));

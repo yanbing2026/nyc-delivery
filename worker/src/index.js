@@ -72,7 +72,7 @@ async function rateLimited(env, ip, limit = 20, bucket = "default") {
 const publicOrder = (r) => ({
   no: r.id, created_at: r.created_at, status: r.status, customer: r.customer, phone: r.phone,
   address: r.address, borough: r.borough, distance_miles: r.distance_miles, eta_minutes: r.eta_minutes,
-  remark: r.remark, items: JSON.parse(r.items || "[]"), subtotal: r.subtotal, tax: r.tax,
+  remark: r.remark, items: JSON.parse(r.items || "[]"), subtotal: r.subtotal, discount: r.discount, tax: r.tax,
   tax_rate: r.tax_rate, tip: r.tip, delivery_fee: r.delivery_fee, total: r.total,
   pay_type: r.pay_type, pickup: !!r.pickup, needs_manual_review: !!r.needs_manual_review,
   pickup_at: r.pickup_at, paid: !!r.paid, paid_at: r.paid_at,
@@ -129,13 +129,13 @@ async function createOrder(env, body, ip) {
   const payType = payList.includes(body.pay_type) ? String(body.pay_type) : payList[0];
   await env.DB.prepare(`INSERT INTO orders
     (id, created_at, source, customer, phone, address, borough, distance_miles, drive_minutes, eta_minutes,
-     remark, items, subtotal, tax, tax_rate, tip, delivery_fee, total, pay_type, pickup_at, pickup, status, needs_manual_review)
-    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,'pending',?22)`).bind(
+     remark, items, subtotal, tax, tax_rate, tip, delivery_fee, discount, total, pay_type, pickup_at, pickup, status, needs_manual_review)
+    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,'pending',?23)`).bind(
     id, stampNow, String(body.source || "web").slice(0, 32), customer.slice(0, 60),
     phone.slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
     (q.address || {}).borough || "", (q.distance || {}).miles ?? null, (q.distance || {}).minutes ?? null,
     q.eta_minutes ?? null, String(body.remark || "").slice(0, 300), JSON.stringify(items.slice(0, 50)),
-    q.subtotal, q.tax, q.tax_rate, q.tip, q.delivery_fee, q.total,
+    q.subtotal, q.tax, q.tax_rate, q.tip, q.delivery_fee, q.discount || 0, q.total,
     payType, pickupAt, pickup ? 1 : 0, manual ? 1 : 0
   ).run();
 
