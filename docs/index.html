@@ -14,9 +14,15 @@ header h1{margin:0;font-size:19px}header .d{font-size:12px;opacity:.92;margin-to
 .seg button{flex:1;min-height:46px;border-radius:10px;border:1px solid var(--line);background:#fff;font-size:15px;font-weight:600;color:var(--fg)}
 .seg button.on{background:var(--pri);border-color:var(--pri);color:#fff}
 .cat{font-size:13px;color:var(--dim);padding:12px 14px 4px;font-weight:600}
-.item{background:var(--card);display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
-.item .n{flex:1;min-width:0}.item .n b{display:block;font-size:16px}.item .n span{font-size:12px;color:var(--dim)}
-.thumb{width:56px;height:56px;object-fit:cover;border-radius:8px;flex:0 0 auto}
+.item{background:var(--card);display:block;padding:12px 14px;border-bottom:1px solid var(--line)}
+.item .nm{display:block;font-size:16px;font-weight:700;margin-bottom:8px}
+.item .row{display:flex;align-items:center;gap:10px}
+.item .n{flex:1;min-width:0}.item .n span{font-size:12px;color:var(--dim)}
+.thumb{width:56px;height:56px;object-fit:cover;border-radius:8px;flex:0 0 auto;cursor:zoom-in}
+.item .price,.item .step{flex:0 0 auto}
+#zoom{position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:60;display:none;align-items:center;justify-content:center;padding:16px}
+#zoom.show{display:flex}
+#zoom img{max-width:100%;max-height:100%;border-radius:12px}
 #notice{background:var(--card);border-bottom:1px solid var(--line);padding:10px 14px;font-size:13px;color:var(--dim);line-height:1.5}
 #notice p{margin:4px 0}
 #notice p:first-child{margin-top:0}
@@ -116,6 +122,8 @@ summary{font-size:14px;color:var(--dim)}
   <div class="rcpt"><pre id="doneRcpt"></pre></div>
   <button onclick="location.reload()">再点一单</button>
 </div>
+
+<div id="zoom"><img id="zoomImg" alt=""></div>
 
 <script src="./wxmenu.js"></script>
 <!-- 不再引入本地里程模块：地址解析/时长/运费全部由后端算（/api/quote 会带回 address_check） -->
@@ -296,6 +304,8 @@ function renderPays(){
   });
 }
 function setTip(r){ if(r<0){tipRate=Math.min(0.5,Math.max(0,(parseFloat(prompt('小费百分比','20'))||0)/100));}else tipRate=r; renderTips(); refresh(); }
+function showZoom(src){const z=$('zoom');$('zoomImg').src=src;z.classList.add('show');}
+$('zoom').onclick=()=>{$('zoom').classList.remove('show');$('zoomImg').removeAttribute('src');};
 function renderMenu(){
   const box=$('menu'); box.innerHTML='';
   MENU.forEach(g=>{
@@ -303,9 +313,11 @@ function renderMenu(){
     g.items.forEach(it=>{
       const q=cart[it.id]||0,d=document.createElement('div');d.className='item';
       const imgHtml=it.image?`<img class="thumb" src="${backend}${it.image}" alt="${it.name}" loading="lazy" onerror="this.remove()">`:'';
-      d.innerHTML=`${imgHtml}<div class="n"><b>${it.name}</b><span>${it.en}${it.desc?' · '+it.desc:''}</span></div>
+      d.innerHTML=`<b class="nm">${it.name}</b>
+        <div class="row">${imgHtml}<div class="n"><span>${it.en}${it.desc?' · '+it.desc:''}</span></div>
         <div class="price">${money(it.price)}</div>
-        <div class="step"><button class="minus" ${q?'':'disabled'}>−</button><span>${q}</span><button class="plus">+</button></div>`;
+        <div class="step"><button class="minus" ${q?'':'disabled'}>−</button><span>${q}</span><button class="plus">+</button></div></div>`;
+      const th=d.querySelector('.thumb'); if(th) th.onclick=()=>showZoom(th.src);
       d.querySelector('.plus').onclick=()=>{cart[it.id]=(cart[it.id]||0)+1;renderMenu();refresh()};
       d.querySelector('.minus').onclick=()=>{cart[it.id]=Math.max(0,(cart[it.id]||0)-1);renderMenu();refresh()};
       box.appendChild(d);
