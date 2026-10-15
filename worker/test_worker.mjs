@@ -438,10 +438,10 @@ check("GET /api/pos/command?limit= respects limit", histLimit.ok === true && his
 
 console.log("== 12. 取餐排期 + 付款方式 + 已付/未付 ==");
 const ps = (await call("/api/pickup-slots")).data;
-check("GET /api/pickup-slots → ok:true, slots.length === 13, slots[0] === '14:00', slots[12] === '20:00', day 比今天大, day_offset 是 1 或 2",
+check("GET /api/pickup-slots → ok:true, slots.length === 11, slots[0] === '14:00', slots[10] === '19:00', day 比今天大, day_offset 是 1 或 2",
   ps.ok === true &&
-  Array.isArray(ps.slots) && ps.slots.length === 13 &&
-  ps.slots[0] === "14:00" && ps.slots[12] === "20:00" &&
+  Array.isArray(ps.slots) && ps.slots.length === 11 &&
+  ps.slots[0] === "14:00" && ps.slots[10] === "19:00" &&
   ps.day > ps.now.slice(0, 10) &&
   (ps.day_offset === 1 || ps.day_offset === 2),
   ps);
@@ -449,7 +449,7 @@ check("GET /api/pickup-slots → ok:true, slots.length === 13, slots[0] === '14:
 const cfgPickup = (await call("/api/config")).data;
 check("GET /api/config → config.pickup.cutoff === '22:00'",
   cfgPickup.config?.pickup?.cutoff === "22:00" &&
-  cfgPickup.config?.pickup?.slots?.length === 13 &&
+  cfgPickup.config?.pickup?.slots?.length === 11 &&
   cfgPickup.config?.pickup?.slots?.[0] === "14:00",
   cfgPickup.config?.pickup);
 
@@ -464,9 +464,9 @@ const badPick = await call("/api/order", { method: "POST", body: {
 check("自取下单带 pickup_at: '1999-01-01 14:00' → 400",
   badPick.status === 400 &&
   badPick.data.ok === false &&
-  badPick.data.pickup?.slots?.length === 13 &&
+  badPick.data.pickup?.slots?.length === 11 &&
   badPick.data.pickup?.slots?.[0] === "14:00" &&
-  badPick.data.pickup?.slots?.[12] === "20:00" &&
+  badPick.data.pickup?.slots?.[10] === "19:00" &&
   badPick.data.pickup?.day > ps.now.slice(0, 10) &&
   (badPick.data.pickup?.day_offset === 1 || badPick.data.pickup?.day_offset === 2) &&
   typeof badPick.data.error === "string" &&

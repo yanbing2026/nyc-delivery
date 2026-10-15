@@ -1,5 +1,5 @@
 // 取餐排期（全部按纽约时间；调用方传进来的一定是纽约时间 "YYYY-MM-DD HH:MM:SS"）
-export const PICKUP_RULES = { cutoff: "22:00", start: "14:00", end: "20:00", step_minutes: 30, lead_days: 1 };
+export const PICKUP_RULES = { cutoff: "22:00", start: "14:00", end: "19:00", step_minutes: 30, lead_days: 1 };
 
 const toMin = (hhmm) => { const [h, m] = String(hhmm).split(":").map(Number); return h * 60 + m; };
 const fromMin = (n) => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0");
