@@ -27,6 +27,9 @@ header h1{margin:0;font-size:19px}header .d{font-size:12px;opacity:.92;margin-to
 #notice p{margin:4px 0}
 #notice p:first-child{margin-top:0}
 #notice p:last-child{margin-bottom:0}
+#tipsNote{background:var(--card);border-top:8px solid var(--bg);padding:12px 14px;font-size:13px;color:var(--dim);line-height:1.6}
+#tipsNote h2{margin:0 0 6px;font-size:14px;color:var(--fg)}
+#tipsNote p{margin:6px 0}
 .price{color:var(--pri);font-weight:700;min-width:62px;text-align:right}
 .step{display:flex;align-items:center;gap:6px}
 .step button{width:44px;height:44px;border-radius:50%;border:1px solid var(--pri);background:#fff;color:var(--pri);font-size:22px;line-height:1}
@@ -73,6 +76,12 @@ summary{font-size:14px;color:var(--dim)}
 
 <div id="notice"></div>
 <div id="menu"></div>
+
+<div id="tipsNote">
+  <h2>小帖士</h2>
+  <p><b>1.</b> 卤牛肉拼盘跟一罐卤水，一份越南辣酱，黃芥末和香辣粉。喜欢热食的朋友可直接把真空包装在热水中浸烫加热，卤水可当沾水亦可拌面或拌饭。</p>
+  <p><b>2.</b> 我们的共享商用厨房在长岛市，有严格门禁，不支持客户自取。现取餐点暂设在大学点。</p>
+</div>
 
 <!-- 店员/调试信息：顾客看不到。默认隐藏，只有页面地址带 ?debug=1 或
      localStorage 里 wxmenu_debug=1 时才显示（店址、配送费规则属于店里配置，
@@ -313,8 +322,9 @@ function renderMenu(){
     g.items.forEach(it=>{
       const q=cart[it.id]||0,d=document.createElement('div');d.className='item';
       const imgHtml=it.image?`<img class="thumb" src="${backend}${it.image}" alt="${it.name}" loading="lazy" onerror="this.remove()">`:'';
+      const sub=[it.en,it.desc].filter(Boolean).join(' · ');
       d.innerHTML=`<b class="nm">${it.name}</b>
-        <div class="row">${imgHtml}<div class="n"><span>${it.en}${it.desc?' · '+it.desc:''}</span></div>
+        <div class="row">${imgHtml}<div class="n"><span>${sub}</span></div>
         <div class="price">${money(it.price)}</div>
         <div class="step"><button class="minus" ${q?'':'disabled'}>−</button><span>${q}</span><button class="plus">+</button></div></div>`;
       const th=d.querySelector('.thumb'); if(th) th.onclick=()=>showZoom(th.src);
