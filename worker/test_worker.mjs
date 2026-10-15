@@ -503,6 +503,134 @@ check("再用 {id, status:'done'}（不带 paid）回写 → order.paid 仍然�
   doneRes.data.order?.paid === true,
   doneRes.data);
 
+console.log("== 13. 菜品照片与店内说明 ==");
+// 1. 发布带 image 的菜 → 响应 images.stored == 1；GET /api/menu/image/<id> 返回 200、Content-Type: image/jpeg、体字节等于发的那些字节
+const sampleBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xEE, 0x01, 0x02, 0x03, 0x04, 0xFF, 0xD9]);
+const sampleB64 = Buffer.from(sampleBytes).toString("base64");
+const sampleDataUrl = `data:image/jpeg;base64,${sampleB64}`;
+
+const pub1 = await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "测试店" },
+  items: [
+    { id: "img1", name: "有图菜", price: 15, category: "热菜", available: true, publish: true, image: sampleDataUrl },
+    { id: "noimg1", name: "无图菜", price: 10, category: "热菜", available: true, publish: true },
+  ],
+}});
+check("发布带 image 的菜 → 响应 images.stored == 1", pub1.data.ok === true && pub1.data.images?.stored === 1, pub1.data);
+
+const img1Res = await worker.fetch(new Request("https://api.example.com/api/menu/image/img1"), env);
+const img1Bytes = new Uint8Array(await img1Res.arrayBuffer());
+const bytesEqual = img1Bytes.length === sampleBytes.length && img1Bytes.every((b, i) => b === sampleBytes[i]);
+check("GET /api/menu/image/<id> 返回 200、Content-Type: image/jpeg、体字节等于发的那些字节",
+  img1Res.status === 200 &&
+  img1Res.headers.get("Content-Type") === "image/jpeg" &&
+  bytesEqual,
+  { status: img1Res.status, contentType: img1Res.headers.get("Content-Type"), len: img1Bytes.length });
+
+// 2. GET /api/menu/image/没有的id → 404
+const notFound = await worker.fetch(new Request("https://api.example.com/api/menu/image/non_existent_id"), env);
+check("GET /api/menu/image/没有的id → 404", notFound.status === 404, notFound.status);
+
+// 3. GET /api/config → 有图的菜带 image: "/api/menu/image/<id>"；没图的菜没有 image 键（'image' in item === false）
+const cfgPub1 = (await call("/api/config")).data;
+const cfgItems1 = cfgPub1.menu.flatMap((c) => c.items);
+const itemWithImg = cfgItems1.find((i) => i.id === "img1");
+const itemWithoutImg = cfgItems1.find((i) => i.id === "noimg1");
+check("GET /api/config → 有图的菜带 image 路径，没图的菜没有 image 键",
+  itemWithImg && itemWithImg.image === "/api/menu/image/img1" &&
+  itemWithoutImg && ("image" in itemWithoutImg === false),
+  { itemWithImg, itemWithoutImg });
+
+// 4. 删图幂等：先发布带图 → 再发布同一道菜但不带 image → /api/menu/image/<id> 返回 404、/api/config 里那道菜没有 image 键、images.stored == 0
+const pubDelImg = await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "测试店" },
+  items: [
+    { id: "img1", name: "有图菜", price: 15, category: "热菜", available: true, publish: true },
+    { id: "noimg1", name: "无图菜", price: 10, category: "热菜", available: true, publish: true },
+  ],
+}});
+const imgAfterDelRes = await worker.fetch(new Request("https://api.example.com/api/menu/image/img1"), env);
+const cfgAfterDel = (await call("/api/config")).data;
+const itemAfterDel = cfgAfterDel.menu.flatMap((c) => c.items).find((i) => i.id === "img1");
+check("删图幂等：重新发布不带 image → 取图 404、/api/config 无 image 键、images.stored == 0",
+  pubDelImg.data.ok === true &&
+  pubDelImg.data.images?.stored === 0 &&
+  imgAfterDelRes.status === 404 &&
+  itemAfterDel && ("image" in itemAfterDel === false),
+  { pub: pubDelImg.data, imgStatus: imgAfterDelRes.status, itemAfterDel });
+
+// 5. 坏图：image 不是 data URL（比如直接给 "abc"）→ 该菜照常发布（在 menu 里），images.skipped == 1，取图 404
+const pubBadImg = await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "测试店" },
+  items: [
+    { id: "bad_img1", name: "坏图菜", price: 12, category: "热菜", available: true, publish: true, image: "abc" },
+  ],
+}});
+const cfgBadImg = (await call("/api/config")).data;
+const badItemInMenu = cfgBadImg.menu.flatMap((c) => c.items).find((i) => i.id === "bad_img1");
+const badImgFetch = await worker.fetch(new Request("https://api.example.com/api/menu/image/bad_img1"), env);
+check("坏图：image 不是 data URL → 该菜照常发布，images.skipped == 1，取图 404",
+  pubBadImg.data.ok === true &&
+  pubBadImg.data.images?.skipped === 1 &&
+  Boolean(badItemInMenu) &&
+  ("image" in badItemInMenu === false) &&
+  badImgFetch.status === 404,
+  { pub: pubBadImg.data, inMenu: Boolean(badItemInMenu), status: badImgFetch.status });
+
+// 6. 超大图：造一个 base64 长度让解出来 > 400_000 字节的 → skipped 计数 +1，其他图不受影响
+const hugeB64 = Buffer.alloc(400001).toString("base64");
+const hugeDataUrl = `data:image/jpeg;base64,${hugeB64}`;
+const pubHuge = await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "测试店" },
+  items: [
+    { id: "huge1", name: "超大图菜", price: 18, category: "热菜", available: true, publish: true, image: hugeDataUrl },
+    { id: "ok1", name: "正常图菜", price: 18, category: "热菜", available: true, publish: true, image: sampleDataUrl },
+  ],
+}});
+const okImgFetch = await worker.fetch(new Request("https://api.example.com/api/menu/image/ok1"), env);
+check("超大图：解出 > 400_000 字节 → skipped 计数 +1，其他图不受影响",
+  pubHuge.data.ok === true &&
+  pubHuge.data.images?.skipped === 1 &&
+  pubHuge.data.images?.stored === 1 &&
+  okImgFetch.status === 200,
+  { pub: pubHuge.data, okImgStatus: okImgFetch.status });
+
+// 7. 菜被删掉：发布一次带图 → 第二次发布的菜单里没有这道菜 → /api/menu/image/<id> 404（孤儿图要清掉）
+await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "测试店" },
+  items: [
+    { id: "will_delete_id", name: "将删菜", price: 20, category: "热菜", available: true, publish: true, image: sampleDataUrl },
+  ],
+}});
+const beforeOrphan = await worker.fetch(new Request("https://api.example.com/api/menu/image/will_delete_id"), env);
+await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "测试店" },
+  items: [
+    { id: "keep_id", name: "保留菜", price: 20, category: "热菜", available: true, publish: true },
+  ],
+}});
+const afterOrphan = await worker.fetch(new Request("https://api.example.com/api/menu/image/will_delete_id"), env);
+check("菜被删掉：发布新菜单不再含该菜 → /api/menu/image/<id> 404（孤儿图清掉）",
+  beforeOrphan.status === 200 && afterOrphan.status === 404,
+  { before: beforeOrphan.status, after: afterOrphan.status });
+
+// 8. 店内说明：发布带 notice 的 shop → /api/config 的 shop.notice 等于原文字（含换行）；不带 notice 的发布 → 不报错
+const sampleNotice = "份量说明：每份够 1-2 人食用\n小贴士：现点现做\n取餐时间：次日 14:00-20:00\n付款方式：现金或转账";
+const pubWithNotice = await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "说明测试店", notice: sampleNotice },
+  items: [{ id: "notice_item", name: "测试菜", price: 10, category: "热菜", available: true, publish: true }],
+}});
+const cfgNoticeRes = (await call("/api/config")).data;
+const pubWithoutNotice = await agent("/api/pos/publish", { method: "POST", body: {
+  shop: { companyName: "无说明店" },
+  items: [{ id: "notice_item", name: "测试菜", price: 10, category: "热菜", available: true, publish: true }],
+}});
+check("店内说明：发布带 notice 的 shop → /api/config 的 shop.notice 等于原文字（含换行）；不带 notice 的发布不报错",
+  pubWithNotice.data.ok === true &&
+  cfgNoticeRes.shop?.notice === sampleNotice &&
+  pubWithoutNotice.data.ok === true,
+  { noticeInConfig: cfgNoticeRes.shop?.notice, noNoticeOk: pubWithoutNotice.data.ok });
+
 console.log();
 if (fails) { console.log("❌ " + fails + " 项失败"); process.exit(1); }
 console.log("✅ Worker 全链路通过（真实 SQL + 真实纽约地址/路线接口）");

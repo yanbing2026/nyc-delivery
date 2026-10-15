@@ -15,7 +15,12 @@ header h1{margin:0;font-size:19px}header .d{font-size:12px;opacity:.92;margin-to
 .seg button.on{background:var(--pri);border-color:var(--pri);color:#fff}
 .cat{font-size:13px;color:var(--dim);padding:12px 14px 4px;font-weight:600}
 .item{background:var(--card);display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
-.item .n{flex:1}.item .n b{display:block;font-size:16px}.item .n span{font-size:12px;color:var(--dim)}
+.item .n{flex:1;min-width:0}.item .n b{display:block;font-size:16px}.item .n span{font-size:12px;color:var(--dim)}
+.thumb{width:56px;height:56px;object-fit:cover;border-radius:8px;flex:0 0 auto}
+#notice{background:var(--card);border-bottom:1px solid var(--line);padding:10px 14px;font-size:13px;color:var(--dim);line-height:1.5}
+#notice p{margin:4px 0}
+#notice p:first-child{margin-top:0}
+#notice p:last-child{margin-bottom:0}
 .price{color:var(--pri);font-weight:700;min-width:62px;text-align:right}
 .step{display:flex;align-items:center;gap:6px}
 .step button{width:44px;height:44px;border-radius:50%;border:1px solid var(--pri);background:#fff;color:var(--pri);font-size:22px;line-height:1}
@@ -60,6 +65,7 @@ summary{font-size:14px;color:var(--dim)}
   <div class="d" id="shopLine">纽约 · 到店自取 · 现金支付</div>
 </header>
 
+<div id="notice"></div>
 <div id="menu"></div>
 
 <!-- 店员/调试信息：顾客看不到。默认隐藏，只有页面地址带 ?debug=1 或
@@ -132,7 +138,7 @@ let MENU=[
  {name:'饮品',items:[{id:'d1',name:'茉莉花茶',en:'Jasmine Tea',desc:'一壶',price:3.95},
    {id:'d2',name:'王老吉',en:'Herbal Tea',desc:'',price:2.5}]}
 ];
-let SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 法拉盛 30 分钟送达'};
+let SHOP={name:'福州小馆',phone:'917-555-0123',slogan:'现点现做 · 法拉盛 30 分钟送达',notice:''};
 // 运费一律由后端算；默认就指向线上 Worker，本地调试时用 localStorage('wxmenu_backend') 覆盖
 const DEFAULT_BACKEND='https://nyc-delivery-orders.yanbing2004.workers.dev';
 let cart={},pickup=true,tipRate=0,pickAt='',paySel='',Q=null,acTimer=null,cfg=null,backend=(localStorage.getItem('wxmenu_backend')||DEFAULT_BACKEND).replace(/\/$/,'');
@@ -145,7 +151,7 @@ const count=()=>Object.values(cart).reduce((a,b)=>a+b,0);
 async function boot(){
   $('shopName').textContent=SHOP.name;
   applyDevVisibility();
-  renderTips();renderMenu();renderSlots();renderPays();
+  renderNotice();renderTips();renderMenu();renderSlots();renderPays();
   if(!backend){
     $('shopLine').textContent=`${SHOP.phone} · 暂时无法接单`;
     $('shopHint').innerHTML='未连接后端：运费由店里服务器计算，请在菜单编辑页填上后端地址';
@@ -167,7 +173,8 @@ async function reloadConfig(){
     const c=await fetch(backend+'/api/config').then(r=>r.json());
     cfg=c.config;
     // 店名/电话/菜单由后端给（这里是唯一来源，页面里那份只是兜底）
-    if(c.shop&&c.shop.name) SHOP={...SHOP,...c.shop};
+    if(c.shop) SHOP={...SHOP,...c.shop};
+    renderNotice();
     if(Array.isArray(c.menu)&&c.menu.length){
       MENU=c.menu;
       // 菜单换了要把购物车里已经不存在的菜清掉，否则件数/合计会算进幽灵菜
@@ -213,9 +220,24 @@ async function reloadConfig(){
       +`${cfg.max_miles>0?` · 最远 ${cfg.max_miles} 英里`:' · 不设距离上限'}`;
   }catch(e){
     $('shopHint').innerHTML='⚠ 读不到后端配置：'+(e.message||e);
+    renderNotice();
     renderSlots();
     renderPays();
   }
+}
+function renderNotice(){
+  const box=$('notice');
+  if(!box) return;
+  const text=(SHOP&&SHOP.notice)||(cfg&&cfg.shop&&cfg.shop.notice)||'';
+  const trimmed=String(text).trim();
+  if(!trimmed){
+    box.innerHTML='';
+    box.style.display='none';
+    return;
+  }
+  const lines=trimmed.split('\n').map(s=>s.trim()).filter(Boolean);
+  box.innerHTML=lines.map(l=>`<p>${l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</p>`).join('');
+  box.style.display='';
 }
 function msg(k,t){ $('msgs').innerHTML=`<div class="msg ${k}">${t}</div>` }
 function renderTips(){
@@ -280,7 +302,8 @@ function renderMenu(){
     const h=document.createElement('div');h.className='cat';h.textContent=g.name;box.appendChild(h);
     g.items.forEach(it=>{
       const q=cart[it.id]||0,d=document.createElement('div');d.className='item';
-      d.innerHTML=`<div class="n"><b>${it.name}</b><span>${it.en}${it.desc?' · '+it.desc:''}</span></div>
+      const imgHtml=it.image?`<img class="thumb" src="${backend}${it.image}" alt="${it.name}" loading="lazy" onerror="this.remove()">`:'';
+      d.innerHTML=`${imgHtml}<div class="n"><b>${it.name}</b><span>${it.en}${it.desc?' · '+it.desc:''}</span></div>
         <div class="price">${money(it.price)}</div>
         <div class="step"><button class="minus" ${q?'':'disabled'}>−</button><span>${q}</span><button class="plus">+</button></div>`;
       d.querySelector('.plus').onclick=()=>{cart[it.id]=(cart[it.id]||0)+1;renderMenu();refresh()};

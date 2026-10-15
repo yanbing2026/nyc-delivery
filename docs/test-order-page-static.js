@@ -21,7 +21,20 @@ function mkEl(tag) {
     // 否则多次渲染的节点会叠在一起，测试点到的是上一轮的旧节点
     set innerHTML(v) { if (String(v) === '') { this.children.length = 0; this._sel = {}; } this._html = String(v); },
     get innerHTML() { return this._html || ''; },
-    querySelector(s) { return this._sel[s] || (this._sel[s] = mkEl('stub:' + s)); },
+    querySelector(s) {
+      if (s === 'img') {
+        const m = (this._html || '').match(/<img\s+([^>]*?)>/i);
+        if (!m) return null;
+        if (!this._sel['img']) {
+          const imgEl = mkEl('img');
+          const srcM = m[1].match(/src="([^"]*)"/i);
+          if (srcM) imgEl.src = srcM[1];
+          this._sel['img'] = imgEl;
+        }
+        return this._sel['img'];
+      }
+      return this._sel[s] || (this._sel[s] = mkEl('stub:' + s));
+    },
     addEventListener() {}, setAttribute() {}, getAttribute() { return null; }, click() { if (this.onclick) this.onclick(); } };
   return el;
 }
@@ -304,6 +317,34 @@ globalThis.fetch = async (u, opts) => {
   check('开页自动带出上次填的姓名/电话',
     els['cust'].value === '记住的客' && els['phone'].value === '9175550199',
     [els['cust'].value, els['phone'].value]);
+
+  console.log('== 9. 店内说明与菜品照片 ==');
+  SHOP_STUB.notice = '份量说明：每份够吃\n小贴士：现点现做\n取餐时间：次日 14:00-20:00';
+  await T.reloadConfig();
+  check('后端桩返回带 notice 的 shop → 页面上 #notice 里有那段文字（多行拆成多段）',
+    els['notice'].style.display !== 'none' &&
+    els['notice'].innerHTML.includes('<p>份量说明：每份够吃</p>') &&
+    els['notice'].innerHTML.includes('<p>小贴士：现点现做</p>') &&
+    els['notice'].innerHTML.includes('<p>取餐时间：次日 14:00-20:00</p>'),
+    els['notice'].innerHTML);
+
+  SHOP_STUB.notice = '';
+  await T.reloadConfig();
+  check('notice 为空 → #notice 不显示',
+    els['notice'].style.display === 'none' && els['notice'].innerHTML === '',
+    [els['notice'].style.display, els['notice'].innerHTML]);
+
+  MENU_STUB[0].items[0].image = '/api/menu/image/s1';
+  delete MENU_STUB[0].items[1].image;
+  await T.reloadConfig();
+  const rowWithImg = els['menu'].children[1];
+  const rowNoImg = els['menu'].children[2];
+  const imgEl = rowWithImg.querySelector('img');
+  const noImgEl = rowNoImg.querySelector('img');
+  check('某个菜带 image → 该菜的行里有一个 img，src = 后端地址 + 图片路径；某个菜不带 → 那一行没有 img',
+    Boolean(imgEl) && imgEl.src === BACKEND + '/api/menu/image/s1' && noImgEl === null,
+    { withImg: imgEl && imgEl.src, withoutImg: noImgEl });
+  delete MENU_STUB[0].items[0].image;
 
   console.log();
   if (fails) { console.log('❌ ' + fails + ' 项失败'); process.exit(1); }

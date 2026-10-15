@@ -64,3 +64,13 @@ CREATE INDEX idx_hits ON hits(ip, ts);
 
 CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, created_at TEXT, cmd TEXT, args TEXT, status TEXT, result TEXT, updated_at TEXT);
 
+-- 菜品照片：App 发布时带上来（data URL → 解出二进制 → base64 存 TEXT）。
+-- 单独一张表是为了不把菜单 JSON 撑大：/api/config 只回一个取图地址，图走 /api/menu/image/<id>。
+CREATE TABLE IF NOT EXISTS menu_images (
+  id         TEXT PRIMARY KEY,   -- 对应 menu_items 的 id
+  mime       TEXT NOT NULL,      -- image/jpeg | image/png | image/webp
+  data       TEXT NOT NULL,      -- 标准 base64（不带 data URL 前缀）
+  updated_at TEXT NOT NULL
+);
+
+-- 线上应用：wrangler d1 execute nyc-orders --command="CREATE TABLE IF NOT EXISTS menu_images (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL);" --remote

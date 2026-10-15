@@ -10,6 +10,7 @@ export const DEFAULT_SHOP = {
   name: "福州小馆",
   phone: "917-555-0123",
   slogan: "现点现做 · 法拉盛 30 分钟送达",
+  notice: "",
 };
 
 export const DEFAULT_MENU = [
@@ -46,6 +47,7 @@ export function readShop(stored) {
     name: str(stored.name, 40) || DEFAULT_SHOP.name,
     phone: str(stored.phone, 30),
     slogan: str(stored.slogan, 60),
+    notice: str(stored.notice, 600),
   };
 }
 
@@ -132,6 +134,7 @@ export function shopFromPos(s) {
     name: str(o.companyName || o.name, 40) || DEFAULT_SHOP.name,
     phone: str(o.companyPhone || o.phone, 30),
     slogan: str(o.companyExtra || o.slogan, 60),
+    notice: str(o.notice, 600),
     address: [str(o.companyAddress || o.address, 160), addr2].filter(Boolean).join(", "),
     tax_rate: Number(o.taxRate ?? o.tax_rate),
     tip_options: Array.isArray(o.suggestedTips) ? o.suggestedTips.map(Number).filter((x) => x > 0 && x <= 0.5) : null,
