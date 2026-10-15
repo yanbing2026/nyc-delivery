@@ -204,10 +204,14 @@ export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate =
     out.error = `还没到起送价 $${cfg.min_order.toFixed(2)}（当前 $${money(subtotal).toFixed(2)}）`;
   }
   const dfee = Number((out.delivery || {}).fee || 0);
-  out.tax = money(money(subtotal) * cfg.tax_rate);
+  const rate = Number(cfg.tax_rate) || 0;
+  const disc = rate > 0 ? money(money(subtotal) * (rate / (1 + rate))) : 0;
+  const taxable = money(money(subtotal) - disc);
+  out.discount = disc;
+  out.tax = money(taxable * rate);
   out.tip = money(money(subtotal) * Math.max(0, Number(tipRate) || 0));
   out.delivery_fee = dfee;
-  out.total = money(money(subtotal) + out.tax + dfee + out.tip);
+  out.total = money(taxable + out.tax + dfee + out.tip);
   if (out.distance && out.distance.minutes != null && !pickup) out.eta_minutes = out.distance.minutes + (cfg.prep_minutes || 0);
   if (out.ok === undefined) out.ok = true;
   return out;

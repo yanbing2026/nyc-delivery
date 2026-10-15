@@ -20,6 +20,7 @@ CREATE TABLE orders (
   tax_rate      REAL NOT NULL DEFAULT 0,
   tip           REAL NOT NULL DEFAULT 0,
   delivery_fee  REAL NOT NULL DEFAULT 0,
+  discount      REAL DEFAULT 0,           -- 折扣（线上单免税折扣）
   total         REAL NOT NULL DEFAULT 0,
   pay_type      TEXT DEFAULT '现金 Cash（送到付）',
   pickup        INTEGER NOT NULL DEFAULT 0,

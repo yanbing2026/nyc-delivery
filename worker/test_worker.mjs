@@ -80,10 +80,10 @@ check("解析到 11368", q1.address && q1.address.zip === "11368", q1.address);
 // 三家地址服务全挂时会走 $5 兜底（那条另有断言）——这时没有里程可比，跳过而不是报红
 if (quoteMiles(q1) == null) console.log("  ⤵ 地址服务这次全挂了（没有里程可比），跳过档位一致性检查");
 else check("配送费跟里程档位一致（不写死坐标）", q1.delivery_fee === expectFee(quoteMiles(q1)), [quoteMiles(q1), q1.delivery_fee]);
-check("税 = 27.9 × 8.875% = 2.48", q1.tax === 2.48, q1.tax);
+check("税 = 27.9 折后 25.63 × 8.875% = 2.27", q1.tax === 2.27, q1.tax);
 check("小费 = 5.02", q1.tip === 5.02, q1.tip);
-check("合计 = 小计 + 税 + 小费 + 配送费", q1.total === round2(q1.subtotal + q1.tax + q1.tip + q1.delivery_fee),
-  [q1.subtotal, q1.tax, q1.tip, q1.delivery_fee, q1.total]);
+check("合计 = 小计 - 折扣 + 税 + 小费 + 配送费", q1.total === round2(q1.subtotal - q1.discount + q1.tax + q1.tip + q1.delivery_fee),
+  [q1.subtotal, q1.discount, q1.tax, q1.tip, q1.delivery_fee, q1.total]);
 const q2 = (await call("/api/quote?address=" + encodeURIComponent("40 Bayard St, New York, NY 10013") + "&subtotal=27.9")).data;
 check("曼哈顿 13.9 英里 → 不设上限，按超出里程计费",
   q2.ok === true && q2.delivery_fee === expectFee(quoteMiles(q2)), [quoteMiles(q2), q2.delivery_fee]);
@@ -91,7 +91,7 @@ const qNJ = (await call("/api/quote?address=" + encodeURIComponent("1 Journal Sq
 check("五区外（新泽西）→ 拒单并说明只送纽约五大区",
   qNJ.ok === false && /只送纽约五大区/.test(qNJ.error || ""), qNJ.error);
 const q3 = (await call("/api/quote?subtotal=27.9&pickup=1")).data;
-check("自取免配送费 30.38", q3.ok && q3.delivery_fee === 0 && q3.total === 30.38, q3);
+check("自取免配送费 27.90", q3.ok && q3.delivery_fee === 0 && q3.total === 27.90, q3);
 const ac = (await call("/api/autocomplete?q=" + encodeURIComponent("100 Mott St"))).data;
 check("自动补全返回候选", ac.ok && ac.items.length > 0 && ac.items[0].postalcode, ac.items && ac.items[0]);
 
@@ -163,14 +163,14 @@ const nyHour = `${ny.year}-${ny.month}-${ny.day} ${ny.hour}`;
 const utcHour = new Date().toISOString().replace("T", " ").slice(0, 13);
 check("created_at 是纽约时间（EDT/EST）不是 UTC",
   o.created_at.slice(0, 13) === nyHour && o.created_at.slice(0, 13) !== utcHour, [o.created_at, nyHour, utcHour]);
-check("服务端重算金额：小计 27.90 / 税 2.48 / 小费 5.02 固定，配送费按里程、合计自洽",
-  o.subtotal === 27.9 && o.tax === 2.48 && o.tip === 5.02 &&
-  o.delivery_fee === expectFee(o.distance_miles) && o.total === round2(o.subtotal + o.tax + o.tip + o.delivery_fee), o);
+check("服务端重算金额：小计 27.90 / 折扣 2.27 / 税 2.27 / 小费 5.02 固定，配送费按里程、合计自洽",
+  o.subtotal === 27.9 && o.discount === 2.27 && o.tax === 2.27 && o.tip === 5.02 &&
+  o.delivery_fee === expectFee(o.distance_miles) && o.total === round2(o.subtotal - o.discount + o.tax + o.tip + o.delivery_fee), o);
 check("订单带距离和预计送达", o.distance_miles > 0 && o.distance_miles <= 8 && o.eta_minutes > 0, [o.distance_miles, o.eta_minutes]);
 check("地址是解析后的标准地址（送餐员能看）", /99(TH)? (ST|STREET)/i.test(o.address), o.address);
 const fake = await call("/api/order", { method: "POST", body: {
   items: MENU, address: "59-04 99th St, Corona, NY 11368", pickup: true, pickup_at: defaultPickupAt(), total: 0.01, subtotal: 0.01, customer: "张先生", phone: "917-555-0123" } });
-check("前端传的假金额被无视（自取按 30.38 收）", fake.data.order.total === 30.38, fake.data.order.total);
+check("前端传的假金额被无视（自取按 27.90 收）", fake.data.order.total === 27.90, fake.data.order.total);
 
 console.log("== 5. 店里设备取单 / 回写 ==");
 check("没 key 取单 → 403", (await call("/api/agent/pending")).status === 403);
@@ -213,8 +213,8 @@ const rep = (await agent("/api/report/summary")).data;
 check("日报默认日期是纽约的今天", rep.from === nyHour.slice(0, 10), [rep.from, nyHour]);
 check("汇总能拿到", rep.ok && rep.summary, rep);
 check("3 单全部完成：外卖 1 / 自取 2", rep.summary.fulfilled === 3 && rep.summary.delivery_orders === 1 && rep.summary.pickup_orders === 2, rep.summary);
-check("金额自洽：营业额 = 小计 + 税 + 小费 + 配送费",
-  Math.round((rep.summary.subtotal + rep.summary.tax + rep.summary.tip + rep.summary.delivery_fee) * 100) / 100 === rep.summary.revenue,
+check("金额自洽：营业额 = 小计 + 小费 + 配送费",
+  Math.round((rep.summary.subtotal + rep.summary.tip + rep.summary.delivery_fee) * 100) / 100 === rep.summary.revenue,
   rep.summary);
 check("外卖那单的配送费与小费仍计入报表", rep.summary.delivery_fee === o.delivery_fee && rep.summary.tip === 5.02,
   [rep.summary.delivery_fee, o.delivery_fee, rep.summary.tip]);

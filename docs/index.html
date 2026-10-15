@@ -362,6 +362,7 @@ async function refresh(){
 }
 function rows(q,sub){
   const r=[`<div class="r"><span>小计</span><span>${money(q.subtotal!=null?q.subtotal:sub)}</span></div>`];
+  if(q.discount) r.push(`<div class="r"><span>折扣（免税）</span><span>-${money(q.discount)}</span></div>`);
   if(q.tax) r.push(`<div class="r"><span>税 ${(q.tax_rate*100).toFixed(3)}%</span><span>${money(q.tax)}</span></div>`);
   if(q.tip) r.push(`<div class="r"><span>小费 ${Math.round(tipRate*100)}%</span><span>${money(q.tip)}</span></div>`);
   r.push((q&&q.ok&&Number.isFinite(+q.total))
