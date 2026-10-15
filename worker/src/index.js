@@ -154,10 +154,40 @@ export default {
     try {
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
+      // 菜品照片：公开只读，顾客页面的 <img> 直接打这个地址
+      if (p.startsWith("/api/menu/image/") || p === "/api/menu/image") {
+        let id = "";
+        try {
+          id = p === "/api/menu/image" ? "" : decodeURIComponent(p.slice("/api/menu/image/".length));
+        } catch {
+          id = p.slice("/api/menu/image/".length);
+        }
+        if (!id) return json({ ok: false, error: "缺图片 id" }, 400);
+        const row = await env.DB.prepare("SELECT mime, data, updated_at FROM menu_images WHERE id = ?1").bind(id).first();
+        if (!row) return json({ ok: false, error: "没有这张图" }, 404);
+        const bin = Uint8Array.from(atob(row.data), (c) => c.charCodeAt(0));
+        return new Response(bin, { headers: {
+          "Content-Type": row.mime || "image/jpeg",
+          "Cache-Control": "public, max-age=300",
+          "ETag": `"${row.updated_at}"`,
+          "Access-Control-Allow-Origin": "*",
+        }});
+      }
+
       // 前端可读的配置（不含密钥）：配送费规则 + 店名/电话 + 菜单
       if (p === "/api/config") {
         const cfg = await getSettings(env);
-        return json({ ok: true, shop: await getShop(env), menu: C.publicMenu(await getMenu(env)),
+        const ids = new Set((await env.DB.prepare("SELECT id FROM menu_images").all()).results.map((r) => r.id));
+        const pubMenu = C.publicMenu(await getMenu(env)).map((c) => ({
+          ...c,
+          items: c.items.map((it) => {
+            if (ids.has(it.id)) {
+              return { ...it, image: "/api/menu/image/" + encodeURIComponent(it.id) };
+            }
+            return { ...it };
+          }),
+        }));
+        return json({ ok: true, shop: await getShop(env), menu: pubMenu,
           pos: await getRow(env, "pos"), config: {
           restaurant_addr: cfg.restaurant_addr, restaurant: cfg.restaurant, max_miles: cfg.max_miles,
           min_order: cfg.min_order, tax_rate: cfg.tax_rate, tiers: cfg.tiers, free_miles: cfg.free_miles,
@@ -281,6 +311,44 @@ export default {
         const b = await request.json().catch(() => ({}));
         const m = C.buildFromPos(b);
         if (!m.ok) return json({ ok: false, error: m.error }, 400);
+
+        const rawList = Array.isArray(b?.items) ? b.items : (Array.isArray(b?.menu) ? b.menu : []);
+        const flatRawItems = [];
+        if (rawList.length && rawList[0] && Array.isArray(rawList[0].items)) {
+          for (const c of rawList) {
+            if (c && Array.isArray(c.items)) {
+              for (const it of c.items) if (it && typeof it === "object") flatRawItems.push(it);
+            }
+          }
+        } else {
+          for (const it of rawList) if (it && typeof it === "object") flatRawItems.push(it);
+        }
+
+        let skipped = 0;
+        const validImages = new Map();
+        for (const it of flatRawItems) {
+          if (!it || typeof it !== "object" || !it.id) continue;
+          if ("image" in it && it.image !== undefined) {
+            const rawImage = it.image;
+            const match = typeof rawImage === "string" ? rawImage.match(/^data:image\/(jpeg|png|webp);base64,(.+)$/s) : null;
+            if (!match) {
+              skipped++;
+              continue;
+            }
+            try {
+              const b64 = match[2].trim();
+              const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+              if (bin.length === 0 || bin.length > 400_000) {
+                skipped++;
+              } else {
+                validImages.set(String(it.id), { mime: `image/${match[1]}`, data: b64 });
+              }
+            } catch {
+              skipped++;
+            }
+          }
+        }
+
         const hasShop = !!(b.shop || b.settings);
         const s = C.shopFromPos(b.shop || b.settings || {});
         const cfg = await getSettings(env);
@@ -296,15 +364,44 @@ export default {
           next.restaurant = { lat: g.lat, lon: g.lon };
         }
         await saveSettings(env, next);
-        const shop = hasShop ? await saveRow(env, "shop", { name: s.name, phone: s.phone, slogan: s.slogan })
+        const shop = hasShop ? await saveRow(env, "shop", { name: s.name, phone: s.phone, slogan: s.slogan, notice: s.notice })
           : await getShop(env);
         const menu = await saveRow(env, "menu", m.menu);
+
+        const currentItemIds = [];
+        for (const cat of menu) {
+          for (const it of cat.items) {
+            currentItemIds.push(it.id);
+          }
+        }
+
+        let stored = 0;
+        const now = nowISO();
+        for (const id of currentItemIds) {
+          if (validImages.has(id)) {
+            const img = validImages.get(id);
+            await env.DB.prepare(
+              "INSERT INTO menu_images (id, mime, data, updated_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET mime = ?2, data = ?3, updated_at = ?4"
+            ).bind(id, img.mime, img.data, now).run();
+            stored++;
+          } else {
+            await env.DB.prepare("DELETE FROM menu_images WHERE id = ?1").bind(id).run();
+          }
+        }
+
+        if (currentItemIds.length === 0) {
+          await env.DB.prepare("DELETE FROM menu_images").run();
+        } else {
+          const placeholders = currentItemIds.map((_, i) => `?${i + 1}`).join(", ");
+          await env.DB.prepare(`DELETE FROM menu_images WHERE id NOT IN (${placeholders})`).bind(...currentItemIds).run();
+        }
+
         const all = menu.reduce((n, c) => n + c.items.length, 0);
         const pub = C.publicMenu(menu).reduce((n, c) => n + c.items.length, 0);
         const meta = { at: nowISO(), device: String(b.device || "").slice(0, 40), items: all,
           categories: menu.length, available: pub, skipped: m.dropped || 0 };
         await saveRow(env, "pos", meta);
-        return json({ ok: true, published: meta, shop, menu });
+        return json({ ok: true, published: meta, shop, menu, images: { stored, skipped } });
       }
 
       // 后台页面的门锁：只验口令对不对，不动任何数据
