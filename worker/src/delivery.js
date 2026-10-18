@@ -3,6 +3,7 @@
 const GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search";
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
 const GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json";
+const GOOGLE_DIRECTIONS = "https://maps.googleapis.com/maps/api/directions/json";
 const GOOGLE_TIMEOUT_MS = 4000;   // 地址解析是下单必经之路，卡住就等于不接单
 const OSRM = "https://router.project-osrm.org/route/v1/driving";
 const M_PER_MILE = 1609.344;
@@ -15,6 +16,31 @@ export function inNyc(g) {
   const b = String((g && g.borough) || "").trim();
   const c = String((g && g.county) || "").trim();
   return NYC_BOROUGHS.includes(b) || NYC_COUNTIES.includes(c);
+}
+
+export function isNycZip(zip) {
+  zip = String(zip || "").trim();
+  if (!/^\d{5}$/.test(zip)) return false;
+  const n = parseInt(zip, 10);
+  if (n >= 10001 && n <= 10292) return true; // Manhattan
+  if (n >= 10301 && n <= 10314) return true; // Staten Island
+  if (n >= 10451 && n <= 10475) return true; // Bronx
+  if (n === 11004 || n === 11005) return true; // Queens (Floral Park/Glen Oaks)
+  if (n >= 11101 && n <= 11109) return true; // Queens (LIC/Astoria)
+  if (n >= 11201 && n <= 11256) return true; // Brooklyn
+  if (n >= 11351 && n <= 11436) return true; // Queens
+  if (n >= 11691 && n <= 11697) return true; // Queens (Far Rockaway)
+  return false;
+}
+
+export function isExplicitlyOutsideNyc(q) {
+  q = String(q || "");
+  if (/\b(NJ|New Jersey|CT|Connecticut|PA|Pennsylvania)\b/i.test(q)) return true;
+  const zips = q.split(/[,\s]+/).map((t) => t.trim()).filter((t) => /^\d{5}$/.test(t));
+  for (const z of zips) {
+    if (!isNycZip(z)) return true;
+  }
+  return false;
 }
 const UA = "nyc-delivery-worker/1.0";
 
@@ -139,7 +165,31 @@ export async function geocode(query, gkey = "") {
   return { ok: true, ...cands[0], candidates: cands.slice(0, 5), warning: zips.length ? "" : "没指定 ZIP，可能解析到别的区" };
 }
 
-export async function routeMiles(a, b) {
+export async function routeMiles(a, b, gkey = "") {
+  if (gkey && a && Number.isFinite(a.lat) && Number.isFinite(a.lon) && b && Number.isFinite(b.lat) && Number.isFinite(b.lon)) {
+    try {
+      const g = new URL(GOOGLE_DIRECTIONS);
+      g.searchParams.set("origin", `${a.lat},${a.lon}`);
+      g.searchParams.set("destination", `${b.lat},${b.lon}`);
+      g.searchParams.set("mode", "driving");
+      g.searchParams.set("key", gkey);
+      const r = await fetch(g, { signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS) });
+      if (r.ok) {
+        const d = await r.json();
+        if (d.status === "OK" && Array.isArray(d.routes) && d.routes.length) {
+          const leg = (d.routes[0].legs || [])[0] || {};
+          const meters = Number((leg.distance || {}).value) || 0;
+          const secs = Number((leg.duration || {}).value) || 0;
+          return {
+            ok: true,
+            miles: Math.round((meters / M_PER_MILE) * 100) / 100,
+            minutes: Math.round(secs / 60),
+            source: "google"
+          };
+        }
+      }
+    } catch (e) { /* 报错/超时退回 OSRM */ }
+  }
   try {
     // 必须带 User-Agent：OSRM 前面是 nginx，空 UA 直接 403 返回 HTML
     // （2026-09-16 线上路线全挂就是这个原因，错误信息还被伪装成 JSON 解析失败）
@@ -180,18 +230,21 @@ export async function quote(restaurant, addrQuery, subtotal, cfg = {}, tipRate =
   } else {
     const [ok, warn] = looksLikeAddress(addrQuery);
     if (!ok) return { ok: false, error: warn, ...out };
+    if (isExplicitlyOutsideNyc(addrQuery)) {
+      return { ok: false, error: `只送纽约五大区（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）——这个地址不在服务范围内`, ...out };
+    }
     // 地址解析抛异常（服务挂了/403/超时）不该把整单打成 500：转成结构化失败返回
     let g;
     try { g = await geocode(addrQuery, gkey); }
     catch (e) { return { ok: false, error: "地址解析失败：" + (e.message || e), ...out }; }
     if (!g.ok) return { ...g, ...out };
     // 只送纽约五大区：出了五区（新泽西/长岛/上州…）直接拒绝，别让顾客下了单才发现送不了
-    if (!inNyc(g)) return { ok: false, error: `只送纽约五大区（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）——这个地址不在服务范围内`, ...out };
+    if (!inNyc(g) || (g.postalcode && !isNycZip(g.postalcode))) return { ok: false, error: `只送纽约五大区（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）——这个地址不在服务范围内`, ...out };
     out.address = { input: addrQuery, matched: g.label, borough: g.borough, zip: g.postalcode,
       lat: g.lat, lon: g.lon, source: g.source };
     if (g.warning) out.address.warning = g.warning;
     if (g.candidates) out.address.candidates = g.candidates;
-    const r = await routeMiles(restaurant, g);
+    const r = await routeMiles(restaurant, g, gkey);
     out.distance = r;
     if (!r.ok) out.distance = { ...r, miles: null };   // 路线挂了别拿瞎猜的距离去收费
     const fee = r.ok ? deliveryFee(r.miles, cfg)

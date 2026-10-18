@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import json
 import math
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -35,6 +36,7 @@ GEOSEARCH = "https://geosearch.planninglabs.nyc/v2/search"
 GEOSEARCH_AC = "https://geosearch.planninglabs.nyc/v2/autocomplete"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 GOOGLE_GEOCODE = "https://maps.googleapis.com/maps/api/geocode/json"
+GOOGLE_DIRECTIONS = "https://maps.googleapis.com/maps/api/directions/json"
 GOOGLE_TIMEOUT = 4
 
 
@@ -61,6 +63,41 @@ NYC_COUNTIES = {"New York County", "Kings County", "Queens County", "Bronx Count
 def in_nyc(g: dict) -> bool:
     return str((g or {}).get("borough") or "").strip() in NYC_BOROUGHS or \
         str((g or {}).get("county") or "").strip() in NYC_COUNTIES
+
+
+def is_nyc_zip(zip_str: str) -> bool:
+    z = str(zip_str or "").strip()
+    if not (z.isdigit() and len(z) == 5):
+        return False
+    n = int(z)
+    if 10001 <= n <= 10292:
+        return True  # Manhattan
+    if 10301 <= n <= 10314:
+        return True  # Staten Island
+    if 10451 <= n <= 10475:
+        return True  # Bronx
+    if n in (11004, 11005):
+        return True  # Queens (Floral Park/Glen Oaks)
+    if 11101 <= n <= 11109:
+        return True  # Queens (LIC/Astoria)
+    if 11201 <= n <= 11256:
+        return True  # Brooklyn
+    if 11351 <= n <= 11436:
+        return True  # Queens
+    if 11691 <= n <= 11697:
+        return True  # Queens (Far Rockaway)
+    return False
+
+
+def is_explicitly_outside_nyc(q: str) -> bool:
+    q = str(q or "")
+    if re.search(r'\b(NJ|New Jersey|CT|Connecticut|PA|Pennsylvania)\b', q, re.I):
+        return True
+    zips = [t.strip(",") for t in q.split() if t.strip(",").isdigit() and len(t.strip(",")) == 5]
+    for z in zips:
+        if not is_nyc_zip(z):
+            return True
+    return False
 
 
 def _get(url: str, params: dict, timeout: int = 12) -> dict:
@@ -206,7 +243,28 @@ def geocode(query: str, prefer_zip: str = "") -> dict:
 
 
 def route_miles(a: dict, b: dict) -> dict:
-    """驾车距离（OSRM）。a/b: {lat, lon}。"""
+    """驾车距离。优先走 Google Maps Directions API（若配置 key），否则走 OSRM。"""
+    key = google_key()
+    if key and a.get("lat") and a.get("lon") and b.get("lat") and b.get("lon"):
+        try:
+            params = {
+                "origin": "%f,%f" % (a["lat"], a["lon"]),
+                "destination": "%f,%f" % (b["lat"], b["lon"]),
+                "mode": "driving",
+                "key": key
+            }
+            d = _get(GOOGLE_DIRECTIONS, params, timeout=GOOGLE_TIMEOUT)
+            if d.get("status") == "OK" and d.get("routes"):
+                leg = d["routes"][0]["legs"][0]
+                meters = float(leg["distance"]["value"])
+                secs = float(leg["duration"]["value"])
+                straight = haversine_miles(a["lat"], a["lon"], b["lat"], b["lon"])
+                return {"ok": True, "miles": round(meters / METERS_PER_MILE, 2),
+                        "km": round(meters / 1000, 2), "minutes": round(secs / 60),
+                        "straight_miles": round(straight, 2), "source": "google"}
+        except Exception:
+            pass
+
     url = "%s/%f,%f;%f,%f" % (OSRM, a["lon"], a["lat"], b["lon"], b["lat"])
     try:
         d = _get(url, {"overview": "false", "steps": "false"}, timeout=15)
@@ -332,11 +390,15 @@ def quote(restaurant: dict, addr_query: str, subtotal: float, cfg: dict,
         ok, warn = looks_like_address(addr_query)
         if not ok:
             return {"ok": False, "error": warn, **out}
+        if is_explicitly_outside_nyc(addr_query):
+            return {"ok": False,
+                    "error": "只送纽约五大区（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）——这个地址不在服务范围内",
+                    **out}
         g = geocode(addr_query)
         if not g.get("ok"):
             return {**g, **out}
         # 只送纽约五大区：出了五区（新泽西/长岛/上州…）直接拒绝
-        if not in_nyc(g):
+        if not in_nyc(g) or (g.get("postalcode") and not is_nyc_zip(g["postalcode"])):
             return {"ok": False,
                     "error": "只送纽约五大区（曼哈顿 / 布鲁克林 / 皇后区 / 布朗克斯 / 史泰登岛）——这个地址不在服务范围内",
                     **out}
