@@ -120,6 +120,9 @@ summary{font-size:14px;color:var(--dim)}
       </div>
       <div class="hint">导航会打开你手机自带的地图 App（跳到你自己的地图里开始路线）。</div>
     </div>
+  </div>
+
+  <div id="scheduleBox">
     <label id="pickLabel">取餐时间 *</label>
     <div class="hint" id="pickHint"></div>
     <div class="tips" id="slots"></div>
@@ -285,13 +288,14 @@ function renderSlots(){
   if(!box||!h) return;
   box.innerHTML='';
   if(!cfg||!cfg.pickup||!Array.isArray(cfg.pickup.slots)){
-    h.textContent='暂时读不到取餐时间，请稍后再试';
+    h.textContent=pickup ? '暂时读不到取餐时间，请稍后再试' : '暂时读不到送餐时间，请稍后再试';
     if($('submit')) $('submit').disabled=true;
     return;
   }
   const p=cfg.pickup;
   const dayText=p.day_offset===1?'明天':'后天';
-  h.textContent=`今晚 ${p.cutoff} 前下单 → ${dayText} ${p.start}–${p.end} 取；过了 ${p.cutoff} 就得再晚一天。`;
+  const verb=pickup?'取':'送达';
+  h.textContent=`今晚 ${p.cutoff} 前下单 → ${dayText} ${p.start}–${p.end} ${verb}；过了 ${p.cutoff} 就得再晚一天。`;
   p.slots.forEach(s=>{
     const b=document.createElement('button');
     b.type='button';
@@ -304,6 +308,7 @@ function renderSlots(){
     b.onclick=()=>{
       pickAt=target;
       renderSlots();
+      refresh();
     };
     box.appendChild(b);
   });
@@ -359,10 +364,12 @@ function setMode(p){
   if($('mDelivery')) $('mDelivery').classList.toggle('on', !p);
   if($('deliveryBox')) $('deliveryBox').style.display = p ? 'none' : 'block';
   if($('pickupBox')) $('pickupBox').style.display = p ? 'block' : 'none';
+  if($('pickLabel')) $('pickLabel').textContent = p ? '取餐时间 *' : '送餐时间（定时送餐） *';
   if($('payHint')) $('payHint').textContent = p
     ? '到店付款；微信转账请转给店里，店里确认到账后小票才记「已付」。'
     : '送到付款（现金送到付）；送餐员送达后收取。';
   updateShopLine();
+  renderSlots();
   refresh();
 }
 function updateShopLine(){
@@ -371,7 +378,7 @@ function updateShopLine(){
     $('shopLine').textContent=[SHOP.phone,'次日 14:00–19:00 到店自取','到店付款'].filter(Boolean).join(' · ');
   } else {
     const minOrderText = cfg && cfg.min_order ? `起送 $${cfg.min_order}` : '起送 $20';
-    $('shopLine').textContent=[SHOP.phone,'纽约五大区送餐',minOrderText,'现金支付'].filter(Boolean).join(' · ');
+    $('shopLine').textContent=[SHOP.phone,'次日 14:00–19:00 定时送餐',minOrderText,'现金支付'].filter(Boolean).join(' · ');
   }
 }
 const debounce=(fn,ms)=>{clearTimeout(acTimer);acTimer=setTimeout(fn,ms)};
@@ -441,9 +448,10 @@ function rows(q,sub){
       const dist=(q.distance&&q.distance.miles!=null)?`（${q.distance.miles} 英里）`:'';
       r.push(`<div class="r"><span>配送费 ${dist}</span><span>${money(q.delivery.fee)}</span></div>`);
     }
-    if(q.eta_minutes){
-      r.push(`<div class="r" style="font-size:13px;color:var(--dim)"><span>预计送达</span><span>约 ${q.eta_minutes} 分钟</span></div>`);
-    }
+    const timeWord = pickAt || '未选择（请在下方时段选择）';
+    r.push(`<div class="r" style="font-size:13px;color:var(--dim)"><span>定时送餐</span><span>${timeWord}</span></div>`);
+  } else if (pickAt) {
+    r.push(`<div class="r" style="font-size:13px;color:var(--dim)"><span>取餐时间</span><span>${pickAt}</span></div>`);
   }
   if(q.tax) r.push(`<div class="r"><span>税 ${(q.tax_rate*100).toFixed(3)}%</span><span>${money(q.tax)}</span></div>`);
   if(q.tip) r.push(`<div class="r"><span>小费 ${Math.round(tipRate*100)}%</span><span>${money(q.tip)}</span></div>`);
@@ -459,11 +467,11 @@ $('submit').onclick=async()=>{
     $('msgs').innerHTML='<div class="msg err">请填姓名和电话（电话至少 10 位数字），不然店里没法联系你。</div>';
     return;
   }
-  if(pickup && !pickAt){ $('msgs').innerHTML='<div class="msg err">请选择取餐时间</div>'; return; }
+  if(!pickAt){ $('msgs').innerHTML=`<div class="msg err">请选择${pickup?'取餐':'送餐'}时间</div>`; return; }
   if(!pickup && (!$('addr') || !$('addr').value.trim())){ $('msgs').innerHTML='<div class="msg err">请填送餐地址</div>'; return; }
   $('submit').disabled=true; $('submit').textContent='提交中…';
   const body={items:items(),pickup:pickup,customer:$('cust').value.trim(),phone:$('phone').value.trim(),
-    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pickup_at:pickup?pickAt:'',pay_type:paySel,
+    remark:$('remark').value.trim(),tip_rate:Math.max(0,tipRate),pickup_at:pickAt,pay_type:paySel,
     address:pickup?'':$('addr').value.trim(),source:'pages-delivery'};
   let order=null,printMsg='';
   if(!backend){
@@ -492,9 +500,9 @@ $('submit').onclick=async()=>{
   }
   $('doneNo').textContent='订单号 '+order.no;
   if(order.pickup){
-    $('doneMsg').textContent=`${printMsg} 取餐时间 ${order.pickup_at}，付款方式 ${order.pay_type}（未付，到店付）。请到店取餐。`;
+    $('doneMsg').textContent=`${printMsg} 取餐时间 ${order.pickup_at || pickAt}，付款方式 ${order.pay_type}（未付，到店付）。请到店取餐。`;
   } else {
-    $('doneMsg').textContent=`${printMsg} 送餐地址：${order.address}，预计送达时间约 ${order.eta_minutes || 40} 分钟，付款方式 ${order.pay_type}（送到付）。送餐员出发前会联系您。`;
+    $('doneMsg').textContent=`${printMsg} 送餐地址：${order.address}，定时送餐时间 ${order.pickup_at || pickAt}，付款方式 ${order.pay_type}（送到付）。送餐员出发前会联系您。`;
   }
   $('doneRcpt').textContent=WXMenu.renderReceipt(order,{name:SHOP.name,slogan:SHOP.slogan,phone:SHOP.phone,footer:'谢谢惠顾|现金支付'},32);
   saveCustomer({name:body.customer,phone:body.phone});

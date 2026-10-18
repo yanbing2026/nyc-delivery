@@ -355,6 +355,7 @@ globalThis.fetch = async (u, opts) => {
     els['deliveryBox'].style.display === 'block' && els['pickupBox'].style.display === 'none',
     { del: els['deliveryBox'].style.display, pick: els['pickupBox'].style.display });
   check('送餐按钮高亮', els['mDelivery']._cls.has('on') && !els['mPickup']._cls.has('on'));
+  check('时间标签切换为送餐时间', els['pickLabel'].textContent.includes('送餐时间'), els['pickLabel'].textContent);
 
   // 地址为空时刷新
   els['addr'].value = '';
@@ -369,21 +370,33 @@ globalThis.fetch = async (u, opts) => {
   check('送餐报价请求带 address 参数且不带 pickup=1',
     calls.some((c) => c.includes('/api/quote') && c.includes('address=') && !c.includes('pickup=1')),
     calls.slice(-2));
-  check('报价区显示配送费与预计送达',
-    els['quote'].innerHTML.includes('配送费') && els['quote'].innerHTML.includes('预计送达'),
+  check('报价区显示配送费与定时送餐',
+    els['quote'].innerHTML.includes('配送费') && els['quote'].innerHTML.includes('定时送餐'),
     els['quote'].innerHTML);
   check('底栏提示送餐上门', els['barHint'].textContent.includes('送餐上门'), els['barHint'].textContent);
   check('地址填好后下单按钮可用', els['submit'].disabled === false);
 
-  // 提交送餐订单
+  // 未选送餐时间直接点下单 → 提示请选择送餐时间
+  T.pickAt = '';
+  els['msgs'].innerHTML = '';
+  await T.submit();
+  check('未选送餐时间下单被拒并提示请选择送餐时间',
+    els['msgs'].innerHTML.includes('请选择送餐时间'), els['msgs'].innerHTML);
+
+  // 选中送餐时段后下单
+  els['slots'].children[1].click();
   calls.length = 0;
   await T.submit();
   await sleep(50);
-  check('送餐订单发到了后端 /api/order 且 pickup 为 false',
-    lastOrderBody && lastOrderBody.pickup === false && lastOrderBody.address === '59-04 99th St, Flushing, NY 11368',
-    lastOrderBody);
-  check('送餐小票与提示包含送餐信息',
-    els['doneMsg'].textContent.includes('送餐地址') && els['doneMsg'].textContent.includes('送餐员'),
+  check('送餐订单发到了后端 /api/order 且 pickup 为 false 且带 pickup_at',
+    lastOrderBody && lastOrderBody.pickup === false &&
+    lastOrderBody.address === '59-04 99th St, Flushing, NY 11368' &&
+    lastOrderBody.pickup_at === `${T.cfg.pickup.day} 14:30`,
+    JSON.stringify(lastOrderBody));
+  check('送餐小票与提示包含送餐地址与定时送餐时间',
+    els['doneMsg'].textContent.includes('送餐地址') &&
+    els['doneMsg'].textContent.includes('定时送餐时间') &&
+    els['doneMsg'].textContent.includes('送餐员'),
     els['doneMsg'].textContent);
 
   // 切换回自取
@@ -391,6 +404,7 @@ globalThis.fetch = async (u, opts) => {
   check('切回自取后 pickup 为 true', T.pickup === true);
   check('自取模式下 pickupBox 显示，deliveryBox 隐藏',
     els['pickupBox'].style.display === 'block' && els['deliveryBox'].style.display === 'none');
+  check('切回自取后时间标签恢复为取餐时间', els['pickLabel'].textContent.includes('取餐时间'), els['pickLabel'].textContent);
 
   console.log();
   if (fails) { console.log('❌ ' + fails + ' 项失败'); process.exit(1); }
