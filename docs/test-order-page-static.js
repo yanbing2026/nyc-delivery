@@ -56,9 +56,9 @@ localStorage.setItem('wxmenu_backend', BACKEND);
 const CFG = { enabled: true, free_miles: 5, tiers: [], per_mile_beyond: 2.0, max_miles: 0,
   min_order: 20.0, tax_rate: 0.08875, prep_minutes: 20, tip_options: [0.15, 0.18, 0.2],
   payment: ['现金 Cash', '微信转账 WeChat', '信用卡 Credit Card'],
-  pickup: { day: '2026-10-08', day_offset: 1, cutoff: '22:00', start: '14:00', end: '20:00',
+  pickup: { day: '2026-10-08', day_offset: 1, cutoff: '22:00', start: '14:00', end: '19:00',
     step_minutes: 30, lead_days: 1,
-    slots: ['14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'] },
+    slots: ['14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00'] },
   restaurant_addr: '10-53 116th St, Flushing, NY 11356',
   restaurant: { lat: 40.7873972, lon: -73.8511667 }, fallback_fee: 5.0 };
 const MILES = 5.56;                        // 固定里程，模拟后端 Google+OSRM 的结果
@@ -121,10 +121,10 @@ globalThis.fetch = async (u, opts) => {
         error: '取餐时间已过期，请按新的可选时间重新选择',
         pickup: {
           day: '2026-10-09',
-          slots: ['14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'],
+          slots: ['14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00'],
           cutoff: '22:00',
           start: '14:00',
-          end: '20:00',
+          end: '19:00',
           step_minutes: 30,
           day_offset: 2,
         },
@@ -239,14 +239,14 @@ globalThis.fetch = async (u, opts) => {
   console.log('== 5. 合计栏不许出现假金额（后端没回来时显示小计） ==');
 
   console.log('== 6. 取餐排期与付款方式 ==');
-  check('slots 容器渲染出 13 个按钮，第一个文本含 14:00、最后一个含 20:00',
-    (els['slots'].children || []).length === 13 &&
+  check('slots 容器渲染出 11 个按钮，第一个文本含 14:00、最后一个含 19:00',
+    (els['slots'].children || []).length === 11 &&
     els['slots'].children[0].textContent.includes('14:00') &&
-    els['slots'].children[12].textContent.includes('20:00'),
+    els['slots'].children[10].textContent.includes('19:00'),
     (els['slots'].children || []).map((c) => c.textContent));
 
-  check('pickHint 文案里同时出现 22:00、14:00、20:00',
-    ['22:00', '14:00', '20:00'].every((k) => els['pickHint'].textContent.includes(k)),
+  check('pickHint 文案里同时出现 22:00、14:00、19:00',
+    ['22:00', '14:00', '19:00'].every((k) => els['pickHint'].textContent.includes(k)),
     els['pickHint'].textContent);
 
   T.pickAt = '';
@@ -287,9 +287,9 @@ globalThis.fetch = async (u, opts) => {
   calls.length = 0;
   await T.submit();
   await sleep(50);
-  check('下单遇排期过期 → 重新渲染 13 个时段、清除选中态、显示错误文案、按钮可再点',
+  check('下单遇排期过期 → 重新渲染 11 个时段、清除选中态、显示错误文案、按钮可再点',
     prevWasOn &&
-    (els['slots'].children || []).length === 13 &&
+    (els['slots'].children || []).length === 11 &&
     (els['slots'].children || []).every((b) => !b.classList.contains('on') && !b._cls.has('on')) &&
     T.pickAt === '' &&
     els['msgs'].innerHTML.includes('取餐时间已过期，请按新的可选时间重新选择') &&
@@ -320,13 +320,13 @@ globalThis.fetch = async (u, opts) => {
     [els['cust'].value, els['phone'].value]);
 
   console.log('== 9. 店内说明与菜品照片 ==');
-  SHOP_STUB.notice = '份量说明：每份够吃\n小贴士：现点现做\n取餐时间：次日 14:00-20:00';
+  SHOP_STUB.notice = '份量说明：每份够吃\n小贴士：现点现做\n取餐时间：次日 14:00-19:00';
   await T.reloadConfig();
   check('后端桩返回带 notice 的 shop → 页面上 #notice 里有那段文字（多行拆成多段）',
     els['notice'].style.display !== 'none' &&
     els['notice'].innerHTML.includes('<p>份量说明：每份够吃</p>') &&
     els['notice'].innerHTML.includes('<p>小贴士：现点现做</p>') &&
-    els['notice'].innerHTML.includes('<p>取餐时间：次日 14:00-20:00</p>'),
+    els['notice'].innerHTML.includes('<p>取餐时间：次日 14:00-19:00</p>'),
     els['notice'].innerHTML);
 
   SHOP_STUB.notice = '';

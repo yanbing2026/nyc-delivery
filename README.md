@@ -27,18 +27,18 @@
 ## 跑测试（全部无需密钥，但需要联网调纽约官方地址/路线接口）
 
 ```bash
-./run_tests.sh          # 一次跑完 6 个套件，共 289 项检查
+./run_tests.sh          # 一次跑完 6 个套件，共 351 项检查
 ```
 
 明细（也可以单独跑）：
 
 ```bash
-cd backend && python3 selftest.py            # 48 项：签名/菜单规则/小票/ESC-POS 字节/HTTP 全链路/打印队列
+cd backend && python3 selftest.py            # 55 项：签名/菜单规则/小票/ESC-POS 字节/HTTP 全链路/打印队列
 cd backend && python3 test_delivery.py       # 41 项：地址解析（Google 优先）+ OSRM 里程/配送费/税/小费/自取/五区范围
-cd backend && node test-order-page.js        # 38 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
-cd docs    && node test-wxmenu.js            # 23 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
-cd docs    && node test-order-page-static.js # 46 项：点单页（站点首页）—— 后端用桩，不依赖线上地址服务，结果确定
-cd worker  && node test_worker.mjs           # 93 项：Worker 全链路（真实 SQL + 真实地址/路线 + App 发布菜单/下单校验）
+cd backend && node test-order-page.js        # 43 项：DOM 桩把页面脚本跑在真后端上（真下单、真出小票）
+cd docs    && node test-wxmenu.js            # 26 项：菜单规则 + 小票渲染（与 Python 逐字符比对）
+cd docs    && node test-order-page-static.js # 58 项：点单页（站点首页）—— 后端用桩，不依赖线上地址服务，结果确定
+cd worker  && node test_worker.mjs           # 128 项：Worker 全链路（真实 SQL + 真实地址/路线 + App 发布菜单/下单校验）
 ```
 
 `worker/test_worker.mjs` 说明：这台开发机是 PRoot/Termux 类环境，`wrangler dev` 起不来（workerd 需要 1GB 对齐内存，PRoot 给不了）。所以测试用 Node 内建 `node:sqlite` 冒充 D1，直接调用 Worker 的 `fetch` 处理器 —— 测的是**同一份 Worker 代码**，不是复刻。
@@ -75,7 +75,7 @@ Worker + D1（settings 表里的 shop / menu / pos 三行 = 网站的唯一真�
 - 后台接口：`GET /api/config`（公开：店名/电话/菜单/运费规则）、`GET /api/report/verify`（验口令）、`POST /api/report/settings`（改规则/店名/菜单，需口令）。`/api/report/verify` 是专门给后台门锁用的**无副作用**接口 —— 不能用 `/api/agent/pending` 验口令，它会把订单标成"已取"。
 
 - 顾客**到店付款**：下单时选 **现金 / 微信转账 / 信用卡**（清单由 App 的设置页发布，网站只读）。网页不碰卡号 → 不接支付网关/PCI，HTTPS 证书用 Let's Encrypt/Cloudflare 免费。**在线支付还没接**。
-- **定时取餐**：每天 **14:00–20:00** 取，30 分钟一格；**当天 22:00 前下单 → 次日取，22:00 后 → 后天取**（不能当天取）。规则在 `worker/src/schedule.js` 与 `backend/delivery.py` 各一份，必须一致。
+- **定时取餐**：每天 **14:00–19:00** 取（共 11 个时段），30 分钟一格；**当天 22:00 前下单 → 次日取，22:00 后 → 后天取**（不能当天取）。规则在 `worker/src/schedule.js` 与 `backend/delivery.py` 各一份，必须一致。
 - **金额一律服务端重算**，前端传来的 subtotal/total 直接忽略（测试里专门放了一单假金额验证）。
 - 现货地址解析的四个坑（都踩过）：不写 ZIP 会把 `40 Bayard St` 解析到布鲁克林；`focus.point` 压不住这种歧义；**纯中文地址搜不到**（必须英文街名）；只给 ZIP 会被当街名。所以前端强制「门牌号 + 英文街名」，并给候选列表让顾客点选。
 - 钱用 Decimal / ROUND_HALF_UP（浮点会把 `12×8.875%` 算成 1.06）。

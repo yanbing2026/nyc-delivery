@@ -163,7 +163,7 @@ function renderSlots(){
     return;
   }
   const dayText=p.day_offset===1?'明天':'后天';
-  h.textContent=`今晚 ${p.cutoff||'22:00'} 前下单 → ${dayText} ${p.start||'14:00'}–${p.end||'20:00'} 取；过了 ${p.cutoff||'22:00'} 就得再晚一天。`;
+  h.textContent=`今晚 ${p.cutoff||'22:00'} 前下单 → ${dayText} ${p.start||'14:00'}–${p.end||'19:00'} 取；过了 ${p.cutoff||'22:00'} 就得再晚一天。`;
   slots.forEach(s=>{
     const b=document.createElement('button');
     b.type='button';
