@@ -193,8 +193,9 @@ code, cfg_resp = url("/api/config")
 cfg_obj = cfg_resp.get("config", {})
 p_plan = (cfg_obj.get("delivery") or {}).get("pickup") or cfg_resp.get("pickup", {})
 check("GET /api/config 含合法 pickup 排期",
-      code == 200 and len(p_plan.get("slots", [])) == 13 and
-      p_plan.get("slots", [])[0] == "14:00" and p_plan.get("cutoff") == "22:00",
+      code == 200 and len(p_plan.get("slots", [])) == 11 and
+      p_plan.get("slots", [])[0] == "14:00" and p_plan.get("slots", [])[-1] == "19:00" and
+      p_plan.get("cutoff") == "22:00",
       p_plan)
 
 target_pickup = "%s 14:00" % pickup_plan(now_str())["day"]

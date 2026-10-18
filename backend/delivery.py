@@ -283,7 +283,7 @@ def route_miles(a: dict, b: dict) -> dict:
 
 
 # ---- 取餐排期（全部按纽约时间；传进来的 stamp 一定是 "YYYY-MM-DD HH:MM:SS"）----
-PICKUP_RULES = {"cutoff": "22:00", "start": "14:00", "end": "20:00", "step_minutes": 30, "lead_days": 1}
+PICKUP_RULES = {"cutoff": "22:00", "start": "14:00", "end": "19:00", "step_minutes": 30, "lead_days": 1}
 
 def _to_min(hhmm):
     parts = str(hhmm or "").split(":")[:2]

@@ -14,7 +14,7 @@ export function pickupDay(stamp, rules = PICKUP_RULES) {
   return d.toISOString().slice(0, 10);
 }
 
-// 该日全部可选取餐时间格（含首含尾）：14:00, 14:30, ... 20:00 → 共 13 个
+// 该日全部可选取餐时间格（含首含尾）：14:00, 14:30, ... 19:00 → 共 11 个
 export function slotsFor(day, rules = PICKUP_RULES) {
   const out = [];
   for (let m = toMin(rules.start); m <= toMin(rules.end); m += rules.step_minutes) out.push(fromMin(m));

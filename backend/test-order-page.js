@@ -176,7 +176,7 @@ async function up() {
       deliveryTotal - T.Q.total === feeDelivery, [T.Q.total, deliveryTotal, feeDelivery]);
     check('自取隐藏地址框', els['deliveryBox'].style.display === 'none', els['deliveryBox'].style.display);
 
-    check('slots 渲染 13 个按钮', (els['slots'].children || []).length === 13, (els['slots'].children || []).length);
+    check('slots 渲染 11 个按钮', (els['slots'].children || []).length === 11, (els['slots'].children || []).length);
     T.pickAt = '';
     els['msgs'].innerHTML = '';
     await T.submit();

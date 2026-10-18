@@ -1,8 +1,9 @@
 -- Cloudflare D1：纽约送餐订单库
 -- 应用方式：wrangler d1 execute nyc-orders --file=./schema.sql --local（本地）或去掉 --local（线上）
+-- 注：本文件包含 IF NOT EXISTS / INSERT OR IGNORE 保证幂等执行，不会清空或覆盖已有的真实订单与店铺设置。
+-- 如需破坏性彻底抹除重置，请使用 reset_schema_danger.sql。
 
-DROP TABLE IF EXISTS orders;
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
   id            TEXT PRIMARY KEY,          -- 订单号
   created_at    TEXT NOT NULL,
   source        TEXT DEFAULT 'web',
@@ -36,13 +37,12 @@ CREATE TABLE orders (
   cash_collected REAL,                     -- 骑手实收现金（对账用）
   synced_at     TEXT DEFAULT ''
 );
-CREATE INDEX idx_orders_status ON orders(status, created_at);
-CREATE INDEX idx_orders_created ON orders(created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
 
 -- 店的配置（配送费规则/店址/支付方式），改这里不用重新部署
-DROP TABLE IF EXISTS settings;
-CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-INSERT INTO settings (key, value) VALUES ('delivery', '{
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT OR IGNORE INTO settings (key, value) VALUES ('delivery', '{
   "enabled": true,
   "free_miles": 5,
   "tiers": [],
@@ -59,9 +59,8 @@ INSERT INTO settings (key, value) VALUES ('delivery', '{
 }');
 
 -- 简易限流（按 IP 小时窗口）
-DROP TABLE IF EXISTS hits;
-CREATE TABLE hits (ip TEXT NOT NULL, ts INTEGER NOT NULL);
-CREATE INDEX idx_hits ON hits(ip, ts);
+CREATE TABLE IF NOT EXISTS hits (ip TEXT NOT NULL, ts INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_hits ON hits(ip, ts);
 
 CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, created_at TEXT, cmd TEXT, args TEXT, status TEXT, result TEXT, updated_at TEXT);
 
@@ -73,5 +72,3 @@ CREATE TABLE IF NOT EXISTS menu_images (
   data       TEXT NOT NULL,      -- 标准 base64（不带 data URL 前缀）
   updated_at TEXT NOT NULL
 );
-
--- 线上应用：wrangler d1 execute nyc-orders --command="CREATE TABLE IF NOT EXISTS menu_images (id TEXT PRIMARY KEY, mime TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL);" --remote

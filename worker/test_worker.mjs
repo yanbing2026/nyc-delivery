@@ -503,6 +503,24 @@ check("再用 {id, status:'done'}（不带 paid）回写 → order.paid 仍然�
   doneRes.data.order?.paid === true,
   doneRes.data);
 
+console.log("== 12b. 状态更新原子性与并发竞争校验 ==");
+const badCash = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "done", cash_collected: -5 } });
+check("非法实收现金（负数）→ 400", badCash.status === 400 && /收款金额无效/.test(badCash.data.error || ""), badCash.data);
+
+const badCashNaN = await agent("/api/agent/status", { method: "POST", body: { id: o.no, status: "done", cash_collected: "abc" } });
+check("非法实收现金（非数字）→ 400", badCashNaN.status === 400 && /收款金额无效/.test(badCashNaN.data.error || ""), badCashNaN.data);
+
+const conOrderRes = await call("/api/order", { method: "POST", body: { items: [{ id: "c3", qty: 10 }], pickup: true, pickup_at: defaultPickupAt(), customer: "并发测试", phone: "917-555-0123" } });
+const conId = conOrderRes.data.order.no;
+await agent("/api/agent/status", { method: "POST", body: { id: conId, status: "taken" } });
+const resA = await agent("/api/agent/status", { method: "POST", body: { id: conId, status: "printed" } });
+check("设备 A 状态更新成功", resA.data.ok === true && resA.data.order.status === "printed");
+
+db.prepare("UPDATE orders SET status = 'void' WHERE id = ?").run(conId);
+const resB = await agent("/api/agent/status", { method: "POST", body: { id: conId, status: "printed" } });
+check("并发冲突或状态已被其他设备改变时返回 409", resB.status === 409 && /并发变更|不允许/.test(resB.data.error || ""), resB.data);
+
+
 console.log("== 13. 菜品照片与店内说明 ==");
 // 1. 发布带 image 的菜 → 响应 images.stored == 1；GET /api/menu/image/<id> 返回 200、Content-Type: image/jpeg、体字节等于发的那些字节
 const sampleBytes = new Uint8Array([0xFF, 0xD8, 0xFF, 0xEE, 0x01, 0x02, 0x03, 0x04, 0xFF, 0xD9]);
@@ -615,7 +633,7 @@ check("菜被删掉：发布新菜单不再含该菜 → /api/menu/image/<id> 40
   { before: beforeOrphan.status, after: afterOrphan.status });
 
 // 8. 店内说明：发布带 notice 的 shop → /api/config 的 shop.notice 等于原文字（含换行）；不带 notice 的发布 → 不报错
-const sampleNotice = "份量说明：每份够 1-2 人食用\n小贴士：现点现做\n取餐时间：次日 14:00-20:00\n付款方式：现金或转账";
+const sampleNotice = "份量说明：每份够 1-2 人食用\n小贴士：现点现做\n取餐时间：次日 14:00-19:00\n付款方式：现金或转账";
 const pubWithNotice = await agent("/api/pos/publish", { method: "POST", body: {
   shop: { companyName: "说明测试店", notice: sampleNotice },
   items: [{ id: "notice_item", name: "测试菜", price: 10, category: "热菜", available: true, publish: true }],

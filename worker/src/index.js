@@ -58,15 +58,18 @@ async function saveSettings(env, cfg) {
   return cfg;
 }
 
-// 简易限流：同一个 IP 一小时最多 N 单
+// 简易限流：同一个 IP 一小时最多 N 单（先插后验，并发请求互不穿透）
 async function rateLimited(env, ip, limit = 20, bucket = "default") {
-  await env.DB.prepare("DELETE FROM hits WHERE ts < ?1").bind(Math.floor(Date.now() / 1000) - 7200).run();
-  const since = Math.floor(Date.now() / 1000) - 3600;
+  const now = Math.floor(Date.now() / 1000);
+  const since = now - 3600;
   const key = `${bucket}:${ip}`;
+  // 概率清理（10% 概率）：避免每个请求都执行全表 DELETE 产生额外锁和开销
+  if (Math.random() < 0.1) {
+    try { await env.DB.prepare("DELETE FROM hits WHERE ts < ?1").bind(now - 7200).run(); } catch (_) {}
+  }
+  await env.DB.prepare("INSERT INTO hits (ip, ts) VALUES (?1, ?2)").bind(key, now).run();
   const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM hits WHERE ip = ?1 AND ts > ?2").bind(key, since).first();
-  if ((row?.n ?? 0) >= limit) return true;
-  await env.DB.prepare("INSERT INTO hits (ip, ts) VALUES (?1, ?2)").bind(key, Math.floor(Date.now() / 1000)).run();
-  return false;
+  return (row?.n ?? 0) > limit;
 }
 
 const publicOrder = (r) => ({
@@ -130,21 +133,32 @@ async function createOrder(env, body, ip) {
         pickup: { ...S.pickupPlan(stampNow), day_offset: stampNow.slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 }
       }, 400);
   }
-  const id = orderNo();
+  let id = "";
   const manual = !pickup && (q.distance || {}).ok === false;
   const payList = Array.isArray(cfg.payment) && cfg.payment.length ? cfg.payment : ["现金 Cash"];
   const payType = payList.includes(body.pay_type) ? String(body.pay_type) : payList[0];
-  await env.DB.prepare(`INSERT INTO orders
-    (id, created_at, source, customer, phone, address, borough, distance_miles, drive_minutes, eta_minutes,
-     remark, items, subtotal, tax, tax_rate, tip, delivery_fee, discount, total, pay_type, pickup_at, pickup, status, needs_manual_review)
-    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,'pending',?23)`).bind(
-    id, stampNow, String(body.source || "web").slice(0, 32), customer.slice(0, 60),
-    phone.slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
-    (q.address || {}).borough || "", (q.distance || {}).miles ?? null, (q.distance || {}).minutes ?? null,
-    q.eta_minutes ?? null, String(body.remark || "").slice(0, 300), JSON.stringify(items.slice(0, 50)),
-    q.subtotal, q.tax, q.tax_rate, q.tip, q.delivery_fee, q.discount || 0, q.total,
-    payType, pickupAt, pickup ? 1 : 0, manual ? 1 : 0
-  ).run();
+  let inserted = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    id = orderNo();
+    try {
+      await env.DB.prepare(`INSERT INTO orders
+        (id, created_at, source, customer, phone, address, borough, distance_miles, drive_minutes, eta_minutes,
+         remark, items, subtotal, tax, tax_rate, tip, delivery_fee, discount, total, pay_type, pickup_at, pickup, status, needs_manual_review)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,'pending',?23)`).bind(
+        id, stampNow, String(body.source || "web").slice(0, 32), customer.slice(0, 60),
+        phone.slice(0, 32), (q.address || {}).matched || String(body.address || "").slice(0, 200),
+        (q.address || {}).borough || "", (q.distance || {}).miles ?? null, (q.distance || {}).minutes ?? null,
+        q.eta_minutes ?? null, String(body.remark || "").slice(0, 300), JSON.stringify(items.slice(0, 50)),
+        q.subtotal, q.tax, q.tax_rate, q.tip, q.delivery_fee, q.discount || 0, q.total,
+        payType, pickupAt, pickup ? 1 : 0, manual ? 1 : 0
+      ).run();
+      inserted = true;
+      break;
+    } catch (e) {
+      if (attempt === 2) throw e;
+    }
+  }
+  if (!inserted) return json({ ok: false, error: "下单繁忙，请重试" }, 500);
 
   const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
   return json({ ok: true, order: publicOrder(row), quote: q });
@@ -253,6 +267,9 @@ export default {
         const id = String(b.id || "");
         const err = String(b.error || "").slice(0, 300);
         const cash = b.cash_collected === undefined || b.cash_collected === null ? null : Number(b.cash_collected);
+        if (cash !== null && (!Number.isFinite(cash) || cash < 0))
+          return json({ ok: false, error: "收款金额无效（必须为非负数字）" }, 400);
+
         const row = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
         if (!row) return json({ ok: false, error: "订单不存在" }, 404);
         const transitions = {
@@ -274,8 +291,17 @@ export default {
         if (requested === "done") { args.push(nowISO()); sets.push(`done_at = ?${args.length}`); }
         if (paid === 1) { args.push(nowISO()); sets.push(`paid_at = ?${args.length}`); }
         args.push(id);
-        await env.DB.prepare(`UPDATE orders SET ${sets.join(", ")} WHERE id = ?${args.length}`)
+        const idIdx = args.length;
+        args.push(row.status);
+        const statusIdx = args.length;
+        const res = await env.DB.prepare(`UPDATE orders SET ${sets.join(", ")} WHERE id = ?${idIdx} AND status = ?${statusIdx}`)
           .bind(...args).run();
+        if (!(res.meta && res.meta.changes === 1)) {
+          const current = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
+          if (current && current.status === requested)
+            return json({ ok: true, order: publicOrder(current) });
+          return json({ ok: false, error: `订单状态已发生并发变更（当前状态：${current?.status || "未知"}），请重新拉取` }, 409);
+        }
         const nextRow = await env.DB.prepare("SELECT * FROM orders WHERE id = ?1").bind(id).first();
         return json({ ok: true, order: publicOrder(nextRow) });
       }
