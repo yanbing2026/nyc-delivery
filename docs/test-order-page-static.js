@@ -131,11 +131,12 @@ globalThis.fetch = async (u, opts) => {
       });
     }
     return reply({ ok: true, order: { no: '260916000000001', created_at: '2026-09-16 01:00:00',
-      customer: body.customer, phone: body.phone, address: '',
-      items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: 0,
-      total: money2(27.9 + 2.48 + money2(27.9 * 0.18)),
+      customer: body.customer, phone: body.phone, address: body.address || '',
+      items: body.items, subtotal: 27.9, tax: 2.48, tax_rate: CFG.tax_rate, tip: money2(27.9 * 0.18), delivery_fee: body.pickup ? 0 : 2.0,
+      total: money2(27.9 + 2.48 + money2(27.9 * 0.18) + (body.pickup ? 0 : 2.0)),
       pickup_at: body.pickup_at,
-      pay_type: body.pay_type || CFG.payment[0], pickup: true, table: 12 },
+      pay_type: body.pay_type || CFG.payment[0], pickup: body.pickup, table: 12,
+      eta_minutes: body.pickup ? undefined : 33 },
       print: { ok: true, driver: 'stub' } });
   }
   throw new Error('未打桩的请求：' + url);
@@ -149,7 +150,7 @@ globalThis.fetch = async (u, opts) => {
   const code = scripts[scripts.length - 1].replace(/\bboot\(\);\s*$/, '');
   // cart/MENU/SHOP 要用 getter：写成简写属性只是创建那一刻的快照，
   // 拿它改购物车等于改一份副本（曾经因此把"幽灵菜"那条用例变成永远通过）
-  eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,prefillSaved,setTip,submit(){ $('submit').onclick(); },
+  eval(code + `\n;globalThis.__T={boot,refresh,reloadConfig,prefillSaved,setTip,setMode,submit(){ $('submit').onclick(); },
     get cart(){return cart}, get MENU(){return MENU}, get SHOP(){return SHOP},
     get Q(){return Q}, get cfg(){return cfg}, get pickup(){return pickup},
     get pickAt(){return pickAt}, set pickAt(v){pickAt=v},
@@ -346,7 +347,53 @@ globalThis.fetch = async (u, opts) => {
     { withImg: imgEl && imgEl.src, withoutImg: noImgEl });
   delete MENU_STUB[0].items[0].image;
 
+  console.log('== 10. 送餐上门模式与算费 ==');
+  // 切换到送餐模式
+  T.setMode(false);
+  check('送餐模式下 pickup 为 false', T.pickup === false);
+  check('送餐模式下 deliveryBox 显示，pickupBox 隐藏',
+    els['deliveryBox'].style.display === 'block' && els['pickupBox'].style.display === 'none',
+    { del: els['deliveryBox'].style.display, pick: els['pickupBox'].style.display });
+  check('送餐按钮高亮', els['mDelivery']._cls.has('on') && !els['mPickup']._cls.has('on'));
+
+  // 地址为空时刷新
+  els['addr'].value = '';
+  await T.refresh();
+  check('地址为空时禁用下单按钮', els['submit'].disabled === true);
+  check('地址为空时提示填送餐地址', els['msgs'].innerHTML.includes('请填送餐地址'), els['msgs'].innerHTML);
+
+  // 填入纽约地址
+  els['addr'].value = '59-04 99th St, Flushing, NY 11368';
+  calls.length = 0;
+  await T.refresh();
+  check('送餐报价请求带 address 参数且不带 pickup=1',
+    calls.some((c) => c.includes('/api/quote') && c.includes('address=') && !c.includes('pickup=1')),
+    calls.slice(-2));
+  check('报价区显示配送费与预计送达',
+    els['quote'].innerHTML.includes('配送费') && els['quote'].innerHTML.includes('预计送达'),
+    els['quote'].innerHTML);
+  check('底栏提示送餐上门', els['barHint'].textContent.includes('送餐上门'), els['barHint'].textContent);
+  check('地址填好后下单按钮可用', els['submit'].disabled === false);
+
+  // 提交送餐订单
+  calls.length = 0;
+  await T.submit();
+  await sleep(50);
+  check('送餐订单发到了后端 /api/order 且 pickup 为 false',
+    lastOrderBody && lastOrderBody.pickup === false && lastOrderBody.address === '59-04 99th St, Flushing, NY 11368',
+    lastOrderBody);
+  check('送餐小票与提示包含送餐信息',
+    els['doneMsg'].textContent.includes('送餐地址') && els['doneMsg'].textContent.includes('送餐员'),
+    els['doneMsg'].textContent);
+
+  // 切换回自取
+  T.setMode(true);
+  check('切回自取后 pickup 为 true', T.pickup === true);
+  check('自取模式下 pickupBox 显示，deliveryBox 隐藏',
+    els['pickupBox'].style.display === 'block' && els['deliveryBox'].style.display === 'none');
+
   console.log();
   if (fails) { console.log('❌ ' + fails + ' 项失败'); process.exit(1); }
   console.log('✅ Pages 版点单页（后端桩）全部通过');
 })();
+
