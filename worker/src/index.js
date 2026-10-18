@@ -113,13 +113,20 @@ async function createOrder(env, body, ip) {
     Number(body.tip_rate || 0), pickup, env.GOOGLE_MAPS_API_KEY);
   if (!q.ok) return json({ ok: false, error: q.error, quote: q }, 400);
   const stampNow = nowISO();
-  const pickupAt = pickup ? String(body.pickup_at || "").trim() : "";
+  const pickupAt = String(body.pickup_at || "").trim();
   if (pickup) {
     if (!pickupAt) return json({ ok: false, error: "请选择取餐时间" }, 400);
     if (!S.validPickup(pickupAt, stampNow))
       return json({
         ok: false,
         error: "取餐时间已过期，请按新的可选时间重新选择",
+        pickup: { ...S.pickupPlan(stampNow), day_offset: stampNow.slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 }
+      }, 400);
+  } else if (pickupAt) {
+    if (!S.validPickup(pickupAt, stampNow))
+      return json({
+        ok: false,
+        error: "送餐时间已过期，请按新的可选时间重新选择",
         pickup: { ...S.pickupPlan(stampNow), day_offset: stampNow.slice(11, 16) < S.PICKUP_RULES.cutoff ? 1 : 2 }
       }, 400);
   }

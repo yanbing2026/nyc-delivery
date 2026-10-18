@@ -130,12 +130,13 @@
     if (order.customer) L.push('顾客: ' + order.customer);
     if (order.phone) L.push('电话: ' + order.phone);
     if (order.pickup && order.pickup_at) L.push('取餐时间: ' + order.pickup_at);
+    else if (!order.pickup && order.pickup_at) L.push('送餐时间: ' + order.pickup_at);
     if (order.address && !order.pickup) {
       L.push('-'.repeat(width));
       L.push('送餐地址:');
       for (const line of wrapText(String(order.address), width)) L.push(line);
       if (order.distance_miles != null) L.push(lr('距离', Number(order.distance_miles).toFixed(2) + ' 英里', width));
-      if (order.eta_minutes) L.push(lr('预计送达', order.eta_minutes + ' 分钟', width));
+      if (order.eta_minutes && !order.pickup_at) L.push(lr('预计送达', order.eta_minutes + ' 分钟', width));
       if (order.needs_manual_review) L.push('!! 距离是估算值，请人工核对 !!');
     }
     if (order.table) L.push('桌号/取餐号: ' + order.table);

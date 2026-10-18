@@ -82,13 +82,15 @@ def render_receipt(order: dict, shop: dict, width: int = 32) -> str:
         L.append("电话: %s" % order["phone"])
     if order.get("pickup") and order.get("pickup_at"):
         L.append("取餐时间: %s" % order["pickup_at"])
+    elif not order.get("pickup") and order.get("pickup_at"):
+        L.append("送餐时间: %s" % order["pickup_at"])
     if order.get("address") and not order.get("pickup"):
         L.append(rule(width))
         L.append("送餐地址:")
         L.extend(wrap(str(order["address"]), width))
         if order.get("distance_miles") is not None:
             L.append(lr("距离", "%.2f 英里" % float(order["distance_miles"]), width))
-        if order.get("eta_minutes"):
+        if order.get("eta_minutes") and not order.get("pickup_at"):
             L.append(lr("预计送达", "%s 分钟" % order["eta_minutes"], width))
         if order.get("needs_manual_review"):
             L.append("!! 距离是估算值，请人工核对 !!")

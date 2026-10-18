@@ -87,12 +87,15 @@ def do_order(payload: dict) -> dict:
     pickup = bool(payload.get("pickup"))
     tip_rate = float(payload.get("tip_rate") or 0)
     now_stamp = delivery.now_str()
-    pickup_at = str(payload.get("pickup_at") or "").strip() if pickup else ""
+    pickup_at = str(payload.get("pickup_at") or "").strip()
     if pickup:
         if not pickup_at:
             return {"ok": False, "error": "请选择取餐时间"}
         if not delivery.valid_pickup(pickup_at, now_stamp, d):
             return {"ok": False, "error": "取餐时间不在可选范围内，请重新选择"}
+    elif pickup_at:
+        if not delivery.valid_pickup(pickup_at, now_stamp, d):
+            return {"ok": False, "error": "送餐时间不在可选范围内，请重新选择"}
     pay_list = d.get("payment") if isinstance(d.get("payment"), list) and d.get("payment") else ["现金 Cash"]
     pay = payload.get("pay_type")
     pay = pay if pay in pay_list else pay_list[0]
