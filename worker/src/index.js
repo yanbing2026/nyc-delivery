@@ -3,6 +3,7 @@
 import * as D from "./delivery.js";
 import * as C from "./catalog.js";
 import * as S from "./schedule.js";
+import { renderDashboardHtml } from "./dashboard.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8" };
 // Pages 前端跟 Worker 不同源，必须给 CORS，否则顾客点「下单」会被浏览器拦
@@ -240,6 +241,19 @@ export default {
       }
       if (p === "/api/order" && request.method === "POST")
         return await createOrder(env, await request.json().catch(() => ({})), ip);
+
+      // 远程经营数据看板 (Web Companion Dashboard)
+      if (p === "/dashboard" || p === "/companion" || p === "/pos") {
+        const shop = await getShop(env);
+        const cfg = await getSettings(env);
+        return new Response(renderDashboardHtml(shop, cfg), {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            ...CORS,
+          },
+        });
+      }
 
       // ---- 店里设备（Agent）用的接口，需要 agent key ----
       // /api/pos/ 也要口令：发布接口要是敞着，谁都能改店里的菜单和价格

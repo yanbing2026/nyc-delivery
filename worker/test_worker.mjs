@@ -649,6 +649,57 @@ check("店内说明：发布带 notice 的 shop → /api/config 的 shop.notice 
   pubWithoutNotice.data.ok === true,
   { noticeInConfig: cfgNoticeRes.shop?.notice, noNoticeOk: pubWithoutNotice.data.ok });
 
+console.log("== 14. 远程经营数据看板 (Web Companion Dashboard) ==");
+const dashRes = await worker.fetch(new Request("https://api.example.com/dashboard"), env);
+const dashHtml = await dashRes.text();
+check("GET /dashboard 返回 200 且包含看板页面",
+  dashRes.status === 200 &&
+  dashHtml.includes("TabPOS 远程经营看板") &&
+  dashHtml.includes("今日各时段营收走势"),
+  { status: dashRes.status });
+
+const companionRes = await worker.fetch(new Request("https://api.example.com/companion"), env);
+check("GET /companion 别名路由同样返回 200", companionRes.status === 200);
+
+const enrichedState = {
+  device: "Sunmi T2s",
+  companyName: "测试酒楼",
+  onlineOrdersEnabled: true,
+  at: Date.now(),
+  gross: 1250.0,
+  orderCount: 30,
+  today: {
+    gross: 1250.0,
+    orderCount: 30,
+    avgTicket: 41.67,
+    hourly: [
+      { hour: 11, count: 5, gross: 200.0, dineIn: 3, pickup: 2 },
+      { hour: 12, count: 12, gross: 550.0, dineIn: 8, pickup: 4 }
+    ],
+    topItems: [
+      { name: "海蛎煎", qty: 15, amount: 194.25 }
+    ],
+    activeTables: [
+      { table: "T01", guests: 4, seatedMinutes: 30, total: 68.50, itemCount: 4 }
+    ],
+    activeStaff: [
+      { userName: "张三", role: "Waitstaff", durationMinutes: 120 }
+    ]
+  }
+};
+
+const pushEnriched = await agent("/api/agent/state", { method: "POST", body: enrichedState });
+check("上报带丰富分析快照成功", pushEnriched.data.ok === true);
+
+const readEnriched = await agent("/api/pos/state");
+check("GET /api/pos/state 完整返回丰富快照数据",
+  readEnriched.data.ok === true &&
+  readEnriched.data.state.companyName === "测试酒楼" &&
+  readEnriched.data.state.today.hourly.length === 2 &&
+  readEnriched.data.state.today.activeTables[0].table === "T01" &&
+  readEnriched.data.state.today.topItems[0].name === "海蛎煎",
+  readEnriched.data);
+
 console.log();
 if (fails) { console.log("❌ " + fails + " 项失败"); process.exit(1); }
 console.log("✅ Worker 全链路通过（真实 SQL + 真实纽约地址/路线接口）");
