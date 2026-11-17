@@ -243,6 +243,7 @@ for invalid_qty, expected_error in [
     (0, "数量必须大于 0"),
     (-3, "数量必须大于 0"),
     ("abc", "数量必须是整数"),
+    ("1.5", "数量必须是整数"),
     (51, "单项数量不能超过 50"),
 ]:
     before_count = len(store.orders())

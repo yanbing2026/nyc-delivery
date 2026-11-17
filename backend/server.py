@@ -126,7 +126,7 @@ def do_order(payload: dict) -> dict:
         if (isinstance(raw_qty, bool)
                 or not isinstance(raw_qty, (int, str))
                 or (isinstance(raw_qty, str)
-                    and not re.fullmatch(r"[+-]?\\d+", raw_qty.strip()))):
+                    and not re.fullmatch(r"[+-]?\d+", raw_qty.strip()))):
             return {"ok": False, "error": "数量必须是整数"}
         qty = int(raw_qty)
         if qty <= 0:
