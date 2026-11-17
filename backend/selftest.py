@@ -198,7 +198,83 @@ check("GET /api/config 含合法 pickup 排期",
       p_plan.get("cutoff") == "22:00",
       p_plan)
 
+# 仅为本文件自测固定测试夹具价格，生产逻辑始终读取 store.config()["menu"]。
+test_menu = store.config()["menu"]
+for category in test_menu.get("categories", []):
+    for menu_item in category.get("items", []):
+        if menu_item.get("id") == "a1":
+            menu_item["price"] = 28.0
+        elif menu_item.get("id") == "b1":
+            menu_item["price"] = 32.0
+store.save_config({"menu": test_menu})
+
 target_pickup = "%s 14:00" % pickup_plan(now_str())["day"]
+
+# 客户端篡改价格：订单仍按服务端菜单价计算，并记录差异事件。
+code, trusted_price = url("/api/order", {
+    "items": [{"id": "a1", "name": "海蛎煎", "qty": 2, "price": 0.01}],
+    "pickup": True, "customer": "价格测试", "phone": "917-555-0101",
+    "pickup_at": target_pickup,
+})
+check("客户端 price=0.01 不影响服务端菜单价",
+      code == 200 and trusted_price["ok"]
+      and trusted_price["order"]["items"][0]["price"] == 28.0
+      and trusted_price["order"]["subtotal"] == 56.0,
+      trusted_price.get("order", {}).get("subtotal"))
+check("价格不一致写入 price_mismatch 事件",
+      any(e.get("kind") == "price_mismatch"
+          and e.get("payload", {}).get("action") == "price_mismatch"
+          and e.get("payload", {}).get("client_price") == 0.01
+          and e.get("payload", {}).get("server_price") == 28.0
+          for e in store.events()))
+
+# 未知商品拒绝整单。
+code, unknown_item = url("/api/order", {
+    "items": [{"name": "不存在的菜", "qty": 1, "price": 0.01}],
+    "pickup": True, "customer": "测试", "phone": "917-555-0102",
+    "pickup_at": target_pickup,
+})
+check("未知菜名拒绝并返回菜名",
+      code == 200 and unknown_item["ok"] is False
+      and "菜单里没有这道菜：不存在的菜" == unknown_item.get("error", ""))
+
+# 非法数量必须拒绝，且不得新增订单。
+for invalid_qty, expected_error in [
+    (0, "数量必须大于 0"),
+    (-3, "数量必须大于 0"),
+    ("abc", "数量必须是整数"),
+    ("1.5", "数量必须是整数"),
+    (51, "单项数量不能超过 50"),
+]:
+    before_count = len(store.orders())
+    code, invalid_order = url("/api/order", {
+        "items": [{"id": "a1", "name": "海蛎煎", "qty": invalid_qty, "price": 28}],
+        "pickup": True, "customer": "测试", "phone": "917-555-0103",
+        "pickup_at": target_pickup,
+    })
+    check("非法数量 %r 被拒且不写库" % invalid_qty,
+          code == 200 and invalid_order["ok"] is False
+          and expected_error == invalid_order.get("error", "")
+          and len(store.orders()) == before_count,
+          invalid_order.get("error"))
+
+# 同一商品 ID 重复出现时合并数量。
+code, merged_order = url("/api/order", {
+    "items": [
+        {"id": "a1", "name": "海蛎煎", "qty": 1, "price": 28},
+        {"id": "a1", "name": "海蛎煎", "qty": 1, "price": 28},
+    ],
+    "pickup": True, "customer": "合并测试", "phone": "917-555-0104",
+    "pickup_at": target_pickup,
+})
+check("重复商品 ID 合并成一条并累加数量",
+      code == 200 and merged_order["ok"]
+      and len(merged_order["order"]["items"]) == 1
+      and merged_order["order"]["items"][0]["qty"] == 2
+      and merged_order["order"]["subtotal"] == 56.0,
+      merged_order.get("order", {}).get("items"))
+
+
 code, o = url("/api/order", {"items": [{"name": "海蛎煎", "qty": 2, "price": 28.0}],
                              "pickup": True, "customer": "张三", "phone": "917-555-0123",
                              "pay_type": "现金 Cash",
