@@ -99,6 +99,75 @@ def do_order(payload: dict) -> dict:
     pay_list = d.get("payment") if isinstance(d.get("payment"), list) and d.get("payment") else ["现金 Cash"]
     pay = payload.get("pay_type")
     pay = pay if pay in pay_list else pay_list[0]
+    # 商品价格只信任服务端菜单；客户端 price 仅用于差异审计。
+    price_by_id = {}
+    price_by_name = {}
+    for category in (cfg.get("menu") or {}).get("categories", []):
+        for menu_item in category.get("items", []):
+            try:
+                server_price = float(menu_item["price"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            menu_name = str(menu_item.get("name") or "").strip()
+            menu_id = menu_item.get("id")
+            canonical_id = str(menu_id).strip() if menu_id is not None else ""
+            entry = (menu_name, server_price, canonical_id)
+            if canonical_id:
+                price_by_id[canonical_id] = entry
+            if menu_name:
+                price_by_name[menu_name] = entry
+
+    normalized_items = []
+    positions_by_id = {}
+    for item in items:
+        if not isinstance(item, dict):
+            return {"ok": False, "error": "菜单里没有这道菜："}
+        raw_qty = item.get("qty", 1)
+        if (isinstance(raw_qty, bool)
+                or not isinstance(raw_qty, (int, str))
+                or (isinstance(raw_qty, str)
+                    and not re.fullmatch(r"[+-]?\\d+", raw_qty.strip()))):
+            return {"ok": False, "error": "数量必须是整数"}
+        qty = int(raw_qty)
+        if qty <= 0:
+            return {"ok": False, "error": "数量必须大于 0"}
+        if qty > 50:
+            return {"ok": False, "error": "单项数量不能超过 50"}
+
+        name = str(item.get("name") or "").strip()
+        raw_id = item.get("id")
+        item_id = str(raw_id).strip() if raw_id is not None else ""
+        matched = price_by_id.get(item_id) if item_id else price_by_name.get(name)
+        if matched is None:
+            return {"ok": False, "error": "菜单里没有这道菜：%s" % name}
+        server_name, server_price, canonical_id = matched
+
+        client_price = item.get("price")
+        if client_price is not None:
+            try:
+                mismatch = round(float(client_price), 2) != round(server_price, 2)
+            except (TypeError, ValueError, OverflowError):
+                mismatch = True
+            if mismatch:
+                store.log_event("price_mismatch", {
+                    "action": "price_mismatch",
+                    "name": server_name,
+                    "client_price": client_price,
+                    "server_price": server_price,
+                })
+
+        merge_key = ("id", canonical_id) if canonical_id else ("name", server_name)
+        if merge_key in positions_by_id:
+            normalized_items[positions_by_id[merge_key]]["qty"] += qty
+        else:
+            positions_by_id[merge_key] = len(normalized_items)
+            normalized_items.append({
+                "name": server_name,
+                "qty": qty,
+                "price": server_price,
+                "spec": item.get("spec", ""),
+            })
+
     req = {
         "no": _next_order_no(),
         "created_at": now_stamp,
@@ -112,11 +181,7 @@ def do_order(payload: dict) -> dict:
         "remark": payload.get("remark") or "",
         "pay_type": pay,
         "tip_rate": tip_rate,
-        "items": [
-            {"name": i.get("name", ""), "qty": int(i.get("qty", 1)),
-             "price": float(i.get("price", 0)), "spec": i.get("spec", "")}
-            for i in items
-        ],
+        "items": normalized_items,
         "source": payload.get("source") or "h5",
     }
     subtotal = round(sum(i["price"] * i["qty"] for i in req["items"]), 2)
