@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 后端自检（签名/菜单/小票/HTTP/队列，自带临时数据目录）
+        working-directory: backend
+        run: python3 selftest.py
+
+      - name: 接单页 + 真后端 + 真里程
+        working-directory: backend
+        run: node test-order-page.js
+
+      - name: 前端菜单/小票与后端交叉验证
+        working-directory: docs
+        run: node test-wxmenu.js
